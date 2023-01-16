@@ -4,7 +4,7 @@ import torch
 # general variables
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 vocab_size = 20_000
-batch_size = 2 # too high batch dimension may overload RAM
+batch_size = 16 # too high batch dimension may overload RAM
 
 # vae variables
 encoder_dim = 100

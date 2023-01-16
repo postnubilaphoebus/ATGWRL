@@ -6,6 +6,7 @@ import regex as re
 import enchant
 import numpy as np
 import time
+import torch
 
 CONTRACTION_MAP = {"ain't": "is not", "aren't": "are not", "can't": "cannot",
                    "can't've": "cannot have", "'cause": "because", "could've": "could have",
@@ -51,6 +52,41 @@ CONTRACTION_MAP = {"ain't": "is not", "aren't": "are not", "can't": "cannot",
                    "you'll've": "you will have", "you're": "you are", "you've": "you have", "here's": "here is",
                    "here're": "here are", "'d": "had", "'s": "is", "n't": "not"}
 
+def save_model(epoch, model):
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'saved_vaes')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    filename = 'epoch_' + str(epoch) + '_model.pth'
+    final_directory = os.path.join(directory, filename)
+    torch.save(model.state_dict(), final_directory)
+
+def real_lengths(unpadded_list):
+    sent_lens = [len(i) for i in unpadded_list]
+    return sent_lens
+
+def pad_batch(batch):
+    list_len = [len(i) for i in batch]
+    max_len = max(list_len)
+    padded_batch = []
+    for element in batch:
+        element.extend([0] * (max_len - len(element)))
+        padded_batch.append(element)
+
+    return padded_batch
+
+def return_weights(padded_batch, max_len):
+    batch_weights = []
+    for element in padded_batch:
+        try:
+            first_zero = padded_batch.index(0)
+            weights = [1] * first_zero + [0] * (max_len - len(element))
+        except:
+            weights = [1] * len(element)
+        batch_weights.append(weights)
+    return batch_weights
+
 def load_vocab(vocab_path):
     count = 0
     vocab = {}
@@ -82,8 +118,13 @@ def load_data_from_file(data_path):
     t1 = time.time()
     data = []
     data_file = open(data_path, 'r')
-    debugging_idx = 0
-    print("debugging load (only 100k)")
+
+    debug = True
+
+    if debug:
+        debugging_idx = 0
+        print("debugging load (only 100k)")
+
     while True:
         line = data_file.readline()
         line = line[1:-2]
@@ -93,9 +134,10 @@ def load_data_from_file(data_path):
         line = line.split(",")
         line = [int(x) for x in line]
         data.append(line)
-        debugging_idx += 1
-        if debugging_idx > 100_000:
-            break
+        if debug:
+            debugging_idx += 1
+            if debugging_idx > 100_000:
+                break
     data_file.close()
     t2 = time.time()
     print("loading data ids took {:.2f} seconds".format(t2-t1))
