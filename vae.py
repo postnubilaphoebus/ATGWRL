@@ -4,6 +4,14 @@ from torch import nn
 import utils.config as config
 
 MAX_SENT_LEN = 30
+# todo: sample from multivariate gaussian
+
+# sth like this:
+'''
+from  torch.distributions import multivariate_normal
+dist = multivariate_normal.MultivariateNormal(loc=torch.zeros(5), covariance_matrix=torch.eye(5))
+probability = torch.exp(dist.log_prob(torch.randn(5)))
+'''
 
 class VariationalAutoEncoder(nn.Module):
     def __init__(self, config):
@@ -20,34 +28,42 @@ class VariationalAutoEncoder(nn.Module):
         self.z_mean = torch.nn.Linear(self.encoder_dim, self.encoder_dim)
         self.z_log_var = torch.nn.Linear(self.encoder_dim, self.encoder_dim)
         self.dropout_layer = torch.nn.Dropout(self.dropout)
-        self.decoder = torch.nn.LSTM(self.encoder_dim, self.decoder_dim)
+        #self.decoder = torch.nn.LSTM(self.encoder_dim, self.decoder_dim, batch_first=True)
+
+
+        self.decoder = torch.nn.LSTMCell(self.encoder_dim, self.decoder_dim)
         self.linear_decoder = torch.nn.Linear(self.decoder_dim, self.vocab_size)
         self.decoder_softmax = torch.nn.Softmax(dim=-1)
 
     def reparameterize(self, z_mean, z_log_var):
+        # z_mean.shape == z_log_var.shape == [batch, seqlen, encod_dim]
         eps = torch.randn(z_mean.size(0), z_mean.size(1), z_mean.size(2)).to(self.device)
         z = z_mean + eps * torch.exp(z_log_var/2.) 
         return z
 
     def init_hidden(self, x):
-        hidden = torch.zeros(1, x.size(1), self.decoder_dim).to(self.device) 
-        cell = torch.zeros(1, x.size(1), self.decoder_dim).to(self.device)
+        hidden = torch.zeros(x.size(1), self.decoder_dim).to(self.device) 
+        cell = torch.zeros(x.size(1), self.decoder_dim).to(self.device)
         return (hidden,cell)
 
     def autoregressive_decoding(self, encoded):
 
+        # [batch, seqlen, encod_dim] -> [seqlen, batch, encod_dim]
+
+        encoded = torch.transpose(encoded, 1, 0) 
+
         hn, cn = self.init_hidden(encoded)
         decoded_tokens = []
         decoded_logits = []
-        idx = 0
-        while idx < MAX_SENT_LEN:
-            output, hiddens = self.decoder(encoded, (hn, cn))
-            h_n, c_n = hiddens
+
+        for i, inp in enumerate(encoded):
+            output, c_n = self.decoder(inp, (hn, cn))
             logits = self.linear_decoder(output)
             tokens = torch.argmax(self.decoder_softmax(logits), dim = -1)
             decoded_tokens.append(tokens)
             decoded_logits.append(logits)
-            idx += 1
+            if i > MAX_SENT_LEN:
+                break
 
         decoded_tokens = torch.stack((decoded_tokens))
         decoded_logits = torch.stack((decoded_logits))
@@ -56,6 +72,9 @@ class VariationalAutoEncoder(nn.Module):
 
     
     def forward(self, x, x_lens):
+
+        # x.shape = [batch_size, seq_len]
+
         embedded = self.embedding_layer(x)
 
         # pack sequence without 0s to speed up LSTM
