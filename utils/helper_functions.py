@@ -3,7 +3,6 @@ from nltk.tokenize import WhitespaceTokenizer
 import os.path
 from tqdm import tqdm
 import regex as re
-import enchant
 import numpy as np
 import time
 import torch
@@ -76,15 +75,24 @@ def pad_batch(batch):
 
     return padded_batch
 
-def return_weights(padded_batch, max_len):
+
+def average_over_nonpadded(accumulated_loss, weights, seqlen_dim):
+    total_size = torch.sum(weights, dim = seqlen_dim)
+    total_size += 1e-12  # avoid division by 0 for all-0 weights.
+    return accumulated_loss / total_size
+
+def return_weights(real_lens):
+    # the sentence and the first padding token
+    # weighted as 1 (model rewarded for ending sentence)
+    max_len = max(real_lens)
+
     batch_weights = []
-    for element in padded_batch:
-        try:
-            first_zero = padded_batch.index(0)
-            weights = [1] * first_zero + [0] * (max_len - len(element))
-        except:
-            weights = [1] * len(element)
+    for length in real_lens:
+        length = length + 1 # add 1 to include pad token as EOS
+        weights = [1] * length + (max_len - length) * [0]
+        weights = weights[:max_len]
         batch_weights.append(weights)
+
     return batch_weights
 
 def load_vocab(vocab_path):
@@ -119,7 +127,7 @@ def load_data_from_file(data_path):
     data = []
     data_file = open(data_path, 'r')
 
-    debug = True
+    debug = False
 
     if debug:
         debugging_idx = 0
@@ -151,18 +159,19 @@ def pychant_lookup(word, human_names, american_words):
     return False
         
 def load_data_and_create_vocab(dataset = "bookcorpus", word_freq_cutoff = 5, vocab_path = "vocab.txt", names_path = "names.txt"):
-    dset = load_dataset(dataset)
-    human_names = load_names(names_path)
-    human_names = set(human_names)
 
     if os.path.isfile(vocab_path) and sum(1 for line in open(vocab_path)) > 20_000:
+        x = None
         print("Found existing vocab file. Size = ", sum(1 for line in open(vocab_path)))
         vocab, revvocab = load_vocab(vocab_path)
-        return vocab, revvocab, dset
+        return vocab, revvocab, x
     else:
+        import enchant
         american_words = enchant.Dict("en_US")
-        
         dset = load_dataset(dataset)
+        human_names = load_names(names_path)
+        human_names = set(human_names)
+        
         word_freqs = {}
         print("creating vocabulary...")
         for element in tqdm(dset['train']):
@@ -196,9 +205,6 @@ def load_data_and_create_vocab(dataset = "bookcorpus", word_freq_cutoff = 5, voc
         return vocab, revvocab, dset
 
 def prepare_data(dset, vocab, vocab_path = "vocab.txt", data_ids = "bookcorpus_ids.txt", data_plain = "bookcorpus_plain.txt", names_path = "names.txt", max_sent_len = 20):
-    punctuation = ["!", "?", ".", ",", ";", ":", "'", "-"]
-    human_names = load_names(names_path)
-    human_names = set(human_names)
 
     if os.path.isfile(data_ids) and os.path.getsize(data_ids) > 0:
         print("Found existing data file. Size = ", sum(1 for line in open(data_ids)))
@@ -209,6 +215,9 @@ def prepare_data(dset, vocab, vocab_path = "vocab.txt", data_ids = "bookcorpus_i
         vocab_rejection = 0
         sent_len_rejection = 0
         cnt = 0
+        punctuation = ["!", "?", ".", ",", ";", ":", "'", "-"]
+        human_names = load_names(names_path)
+        human_names = set(human_names)
 
         with open(data_ids, "w") as f, open(data_plain, "w") as g:
             for element in tqdm(dset['train']):
