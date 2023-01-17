@@ -1,0 +1,43 @@
+Found existing vocab file. Size =  85552
+Found existing data file. Size =  37363756
+loading data ids... (est time 3 mins)
+loading data ids took 188.30 seconds
+Starting VAE training. Number of training epochs 5, batch_size 64
+Logging interval:  100
+Peforming monotonic KL annealing for first 20000 batches
+Progress 0.0000% | Epoch 0 | Batch 0 | Loss 0.0016191831 | Reconstruction Error 0.0016191831 | KL_div 0.0030676115 | KL_weight 0.00000
+Progress 0.0000% | Epoch 0 | Batch 100 | Loss 0.0000526042 | Reconstruction Error 0.0000415127 | KL_div 0.0022182965 | KL_weight 0.00500
+Progress 0.0000% | Epoch 0 | Batch 200 | Loss 0.0000204710 | Reconstruction Error 0.0000162341 | KL_div 0.0004236948 | KL_weight 0.01000
+Progress 0.0000% | Epoch 0 | Batch 300 | Loss 0.0000132577 | Reconstruction Error 0.0000128366 | KL_div 0.0000280717 | KL_weight 0.01500
+Progress 0.0000% | Epoch 0 | Batch 400 | Loss 0.0000121371 | Reconstruction Error 0.0000121213 | KL_div 0.0000007882 | KL_weight 0.02000
+Progress 0.0000% | Epoch 0 | Batch 500 | Loss 0.0000131111 | Reconstruction Error 0.0000118122 | KL_div 0.0000519552 | KL_weight 0.02500
+Progress 0.0000% | Epoch 0 | Batch 600 | Loss 0.0000117067 | Reconstruction Error 0.0000116995 | KL_div 0.0000002403 | KL_weight 0.03000
+Progress 0.0000% | Epoch 0 | Batch 700 | Loss 0.0000116428 | Reconstruction Error 0.0000116344 | KL_div 0.0000002387 | KL_weight 0.03500
+Progress 0.0000% | Epoch 0 | Batch 800 | Loss 0.0000116707 | Reconstruction Error 0.0000116614 | KL_div 0.0000002313 | KL_weight 0.04000
+Progress 0.0000% | Epoch 0 | Batch 900 | Loss 0.0000116657 | Reconstruction Error 0.0000116402 | KL_div 0.0000005652 | KL_weight 0.04500
+Progress 0.0000% | Epoch 0 | Batch 1000 | Loss 0.0000115609 | Reconstruction Error 0.0000115580 | KL_div 0.0000000582 | KL_weight 0.05000
+Progress 0.0000% | Epoch 0 | Batch 1100 | Loss 0.0000114753 | Reconstruction Error 0.0000114716 | KL_div 0.0000000673 | KL_weight 0.05500
+Progress 0.0000% | Epoch 0 | Batch 1200 | Loss 0.0000115299 | Reconstruction Error 0.0000115269 | KL_div 0.0000000511 | KL_weight 0.06000
+Progress 0.0000% | Epoch 0 | Batch 1300 | Loss 0.0000114543 | Reconstruction Error 0.0000114523 | KL_div 0.0000000308 | KL_weight 0.06500
+Progress 0.0000% | Epoch 0 | Batch 1400 | Loss 0.0000114832 | Reconstruction Error 0.0000114801 | KL_div 0.0000000445 | KL_weight 0.07000
+Progress 0.0000% | Epoch 0 | Batch 1500 | Loss 0.0000114709 | Reconstruction Error 0.0000114689 | KL_div 0.0000000265 | KL_weight 0.07500
+Progress 0.0000% | Epoch 0 | Batch 1600 | Loss 0.0000113949 | Reconstruction Error 0.0000113898 | KL_div 0.0000000643 | KL_weight 0.08000
+Progress 0.0000% | Epoch 0 | Batch 1700 | Loss 0.0000114659 | Reconstruction Error 0.0000114639 | KL_div 0.0000000238 | KL_weight 0.08500
+Progress 0.0000% | Epoch 0 | Batch 1800 | Loss 0.0000114226 | Reconstruction Error 0.0000114179 | KL_div 0.0000000528 | KL_weight 0.09000
+Progress 0.0001% | Epoch 0 | Batch 1900 | Loss 0.0000114517 | Reconstruction Error 0.0000114482 | KL_div 0.0000000368 | KL_weight 0.09500
+Progress 0.0001% | Epoch 0 | Batch 2000 | Loss 0.0000114566 | Reconstruction Error 0.0000114549 | KL_div 0.0000000172 | KL_weight 0.10000
+Progress 0.0001% | Epoch 0 | Batch 2100 | Loss 0.0000114800 | Reconstruction Error 0.0000114763 | KL_div 0.0000000353 | KL_weight 0.10500
+Progress 0.0001% | Epoch 0 | Batch 2200 | Loss 0.0000113477 | Reconstruction Error 0.0000113452 | KL_div 0.0000000226 | KL_weight 0.11000
+Progress 0.0001% | Epoch 0 | Batch 2300 | Loss 0.0000115003 | Reconstruction Error 0.0000114986 | KL_div 0.0000000145 | KL_weight 0.11500
+Progress 0.0001% | Epoch 0 | Batch 2400 | Loss 0.0000114334 | Reconstruction Error 0.0000114301 | KL_div 0.0000000275 | KL_weight 0.12000
+Progress 0.0001% | Epoch 0 | Batch 2500 | Loss 0.0000115114 | Reconstruction Error 0.0000115100 | KL_div 0.0000000112 | KL_weight 0.12500
+Progress 0.0001% | Epoch 0 | Batch 2600 | Loss 0.0000116290 | Reconstruction Error 0.0000116231 | KL_div 0.0000000456 | KL_weight 0.13000
+Progress 0.0001% | Epoch 0 | Batch 2700 | Loss 0.0000120538 | Reconstruction Error 0.0000120516 | KL_div 0.0000000164 | KL_weight 0.13500
+Progress 0.0001% | Epoch 0 | Batch 2800 | Loss 0.0000118980 | Reconstruction Error 0.0000118969 | KL_div 0.0000000080 | KL_weight 0.14000
+Progress 0.0001% | Epoch 0 | Batch 2900 | Loss 0.0000116749 | Reconstruction Error 0.0000116738 | KL_div 0.0000000076 | KL_weight 0.14500
+Progress 0.0001% | Epoch 0 | Batch 3000 | Loss 0.0000115697 | Reconstruction Error 0.0000115688 | KL_div 0.0000000058 | KL_weight 0.15000
+Progress 0.0001% | Epoch 0 | Batch 3100 | Loss 0.0000114669 | Reconstruction Error 0.0000114643 | KL_div 0.0000000169 | KL_weight 0.15500
+Progress 0.0001% | Epoch 0 | Batch 3200 | Loss 0.0000115180 | Reconstruction Error 0.0000115163 | KL_div 0.0000000104 | KL_weight 0.16000
+Progress 0.0001% | Epoch 0 | Batch 3300 | Loss 0.0000114907 | Reconstruction Error 0.0000114893 | KL_div 0.0000000085 | KL_weight 0.16500
+Progress 0.0001% | Epoch 0 | Batch 3400 | Loss 0.0000114506 | Reconstruction Error 0.0000114465 | KL_div 0.0000000241 | KL_weight 0.17000
+Progress 0.0001% | Epoch 0 | Batch 3500 | Loss 0.0000114753 | Reconstruction Error 0.0000114741 | KL_div 0.0000000072 | KL_weight 0.17500

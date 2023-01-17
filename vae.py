@@ -3,8 +3,15 @@ import torch
 from torch import nn
 import utils.config as config
 
-MAX_SENT_LEN = 30
+MAX_SENT_LEN = 23 # 20 (+ 3 for punctuation)
+
 # todo: sample from multivariate gaussian
+
+'''
+Once all symbols of the input are passed, 
+the final hidden state is denoted as the summary c of the input. 
+The decoder is an RNN that is used used to generate an output sequence y given a summary c. 
+'''
 
 # sth like this:
 '''
@@ -37,34 +44,28 @@ class VariationalAutoEncoder(nn.Module):
 
     def reparameterize(self, z_mean, z_log_var):
         # z_mean.shape == z_log_var.shape == [batch, seqlen, encod_dim]
-        eps = torch.randn(z_mean.size(0), z_mean.size(1), z_mean.size(2)).to(self.device)
+        eps = torch.randn(z_mean.size(0), z_mean.size(1)).to(self.device)
         z = z_mean + eps * torch.exp(z_log_var/2.) 
         return z
 
     def init_hidden(self, x):
-        hidden = torch.zeros(x.size(1), self.decoder_dim).to(self.device) 
-        cell = torch.zeros(x.size(1), self.decoder_dim).to(self.device)
+        hidden = torch.zeros(x.size(0), self.decoder_dim).to(self.device) 
+        cell = torch.zeros(x.size(0), self.decoder_dim).to(self.device)
         return (hidden,cell)
 
     def autoregressive_decoding(self, encoded):
-
-        # [batch, seqlen, encod_dim] -> [seqlen, batch, encod_dim]
-
-        encoded = torch.transpose(encoded, 1, 0) 
 
         hn, cn = self.init_hidden(encoded)
         decoded_tokens = []
         decoded_logits = []
 
-        for i, inp in enumerate(encoded):
-            output, c_n = self.decoder(inp, (hn, cn))
+        for idx in range(MAX_SENT_LEN):
+            output, c_n = self.decoder(encoded, (hn, cn))
             logits = self.linear_decoder(output)
             tokens = torch.argmax(self.decoder_softmax(logits), dim = -1)
             decoded_tokens.append(tokens)
             decoded_logits.append(logits)
-            if i > MAX_SENT_LEN:
-                break
-
+        
         decoded_tokens = torch.stack((decoded_tokens))
         decoded_logits = torch.stack((decoded_logits))
 
@@ -86,6 +87,10 @@ class VariationalAutoEncoder(nn.Module):
 
         # dropout
         output = self.dropout_layer(output)
+
+        # get the last hidden state (of the sequence) of the encoder
+        # output.shape = [batch, seqlen, encoder_dim]
+        output = output[:, -1, :]
 
         # code layer
         z_mean, z_log_var = self.z_mean(output), self.z_log_var(output)

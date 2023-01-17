@@ -1,7 +1,7 @@
 from vae import VariationalAutoEncoder
 import torch
-from torch import nn
-import utils.config as config
+import random
+import torch.nn.functional as F
 from utils.helper_functions import load_data_and_create_vocab, \
                                    prepare_data, \
                                    yieldBatch, \
@@ -9,19 +9,16 @@ from utils.helper_functions import load_data_and_create_vocab, \
                                    real_lengths, \
                                    pad_batch, \
                                    return_weights, \
-                                   save_model
+                                   save_model, \
+                                   average_over_nonpadded
 
-import random
-import torch.nn.functional as F
-import numpy as np
-
-# monotonic annealing schedule for KL term
+# todo: sum only over non_padded lengths
 
 def train(config, 
           loss_fn = None, 
           num_epochs = 5,
           logging_interval = 100, 
-          saving_interval = 500_000,
+          saving_interval = 5000,
           kl_annealing_iters = 20_000):
 
     vocab, revvocab, dset = load_data_and_create_vocab()
@@ -45,7 +42,7 @@ def train(config,
                 'train_kl_loss_per_batch': []}
 
     if loss_fn is None:
-        loss_fn = F.mse_loss
+        loss_fn = torch.nn.MSELoss(reduction='none')
 
     model.train()
     
@@ -62,8 +59,7 @@ def train(config,
 
             original_lens_batch = real_lengths(batch)
             padded_batch = pad_batch(batch)
-            max_sentlen = max(original_lens_batch)
-            weights = return_weights(padded_batch, max_sentlen)
+            weights = return_weights(original_lens_batch)
 
             weights = torch.FloatTensor(weights).to(model.device)
             padded_batch = torch.LongTensor(padded_batch).to(model.device)
@@ -71,6 +67,7 @@ def train(config,
             encoded, z_mean, z_log_var, decoded_tokens, decoded_logits = model(padded_batch, original_lens_batch)
 
             kl_div = - 0.5 * (1 + z_log_var - z_mean**2 - torch.exp(z_log_var))
+            kl_div = torch.mean(kl_div)
 
             reconstruction_error = []
 
@@ -80,12 +77,13 @@ def train(config,
 
             for weight, target, logit in zip(weights, padded_batch, decoded_logits):
                 mse_loss = loss_fn(logit, target)
-                reconstruction_error.append(mse_loss * 1)
-
-            kl_div = torch.mean(kl_div)
+                mse_loss = torch.mean(mse_loss, dim = -1)
+                reconstruction_error.append(mse_loss * weight)
 
             reconstruction_error = torch.stack((reconstruction_error))
-            reconstruction_error = torch.mean(reconstruction_error)
+            reconstruction_error = torch.sum(reconstruction_error, dim = 0) # sum over seqlen
+            reconstruction_error = average_over_nonpadded(reconstruction_error, weights, 0) # av over seqlen
+            reconstruction_error = torch.mean(reconstruction_error) # mean over batch
 
             loss = reconstruction_error + kl_weight * kl_div
             optimizer.zero_grad()
@@ -105,7 +103,7 @@ def train(config,
                 progress = epoch_idx / num_epochs + batch_idx / data_len
                 print('Progress {:.4f}% | Epoch {} | Batch {} | Loss {:.10f} | Reconstruction Error {:.10f} | KL_div {:.10f} | KL_weight {:.5f}'.format(progress, epoch_idx, batch_idx, loss.item(), reconstruction_error.item(), kl_div.item(), kl_weight))
 
-            if batch_idx % saving_interval == 0:
+            if batch_idx % saving_interval == 0 and batch_idx > 0:
                 print("Progress: {}, saving model...".format(progress))
                 save_model(epoch_idx, model)
 
