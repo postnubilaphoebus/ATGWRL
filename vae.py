@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 import utils.config as config
+import time
 
 MAX_SENT_LEN = 23 # 20 (+ 3 for punctuation)
 
@@ -76,7 +77,11 @@ class VariationalAutoEncoder(nn.Module):
 
         # x.shape = [batch_size, seq_len]
 
+        t0 = time.time()
+
         embedded = self.embedding_layer(x)
+
+        t1 = time.time()
 
         # pack sequence without 0s to speed up LSTM
         embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, x_lens, batch_first=True, enforce_sorted = False)
@@ -92,11 +97,28 @@ class VariationalAutoEncoder(nn.Module):
         # output.shape = [batch, seqlen, encoder_dim]
         output = output[:, -1, :]
 
+        t2 = time.time()
+
         # code layer
         z_mean, z_log_var = self.z_mean(output), self.z_log_var(output)
+
+        t3 = time.time()
+        
         encoded = self.reparameterize(z_mean, z_log_var)
+
+        t4 = time.time()
 
         # autoregressive decoding
         decoded_tokens, decoded_logits = self.autoregressive_decoding(encoded)
-        
-        return encoded, z_mean, z_log_var, decoded_tokens, decoded_logits
+
+        t5 = time.time()
+
+        decoding_time = t5 - t4
+        reparam_time = t4 - t3
+        code_layer_time = t3 - t2
+        encoder_plus_dropout_time = t2 - t1
+        embedding_time = t1 - t0
+
+        time_list = [decoding_time, reparam_time, code_layer_time, encoder_plus_dropout_time, embedding_time]
+
+        return encoded, z_mean, z_log_var, decoded_tokens, decoded_logits, time_list
