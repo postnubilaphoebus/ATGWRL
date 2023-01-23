@@ -74,7 +74,21 @@ def pad_batch(batch):
         padded_batch.append(element)
 
     return padded_batch
+    
+def reformat_decoded_batch(decoded_batch, pad_id):
+    decoded_batch = torch.transpose(decoded_batch, 1, 0)
+    decoded_batch = decoded_batch.tolist()
+    max_len = len(decoded_batch[0])
+    reformatted_batch = []
+    for element in decoded_batch:
+        # we include the first PAD as a form of EOS_id
+        first_zero = element.index(pad_id) + 1
+        element = element[:first_zero]
+        if len(element) < max_len:
+            element = element + [0] * (max_len - len(element))
+        reformatted_batch.append(element)
 
+    return reformatted_batch
 
 def average_over_nonpadded(accumulated_loss, weights, seqlen_dim):
     total_size = torch.sum(weights, dim = seqlen_dim)
@@ -127,7 +141,7 @@ def load_data_from_file(data_path):
     data = []
     data_file = open(data_path, 'r')
 
-    debug = False
+    debug = True
 
     if debug:
         debugging_idx = 0
@@ -196,6 +210,8 @@ def load_data_and_create_vocab(dataset = "bookcorpus", word_freq_cutoff = 5, voc
 
         with open("vocab.txt", "w") as f:
             f.write("PAD\n")
+            f.write("EOS\n")
+            f.write("BOS\n")
             f.write("UNK\n")
             for key in sorted_word_freqs:
                 f.write(key+ "\n")
