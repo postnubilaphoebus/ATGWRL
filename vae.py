@@ -37,11 +37,11 @@ class VariationalAutoEncoder(nn.Module):
         self.z_log_var = torch.nn.Linear(self.encoder_dim, self.encoder_dim)
         self.dropout_layer = torch.nn.Dropout(self.dropout)
         #self.decoder = torch.nn.LSTM(self.encoder_dim, self.decoder_dim, batch_first=True)
-
-
+        self.layer_normalisation = torch.nn.LayerNorm(self.embedding_dimension)
         self.decoder = torch.nn.LSTMCell(self.encoder_dim, self.decoder_dim)
         self.linear_decoder = torch.nn.Linear(self.decoder_dim, self.vocab_size)
         self.decoder_softmax = torch.nn.Softmax(dim=-1)
+        self.re_embedding_layer = torch.nn.Linear(self.decoder_dim, self.embedding_dimension)
 
     def reparameterize(self, z_mean, z_log_var):
         # z_mean.shape == z_log_var.shape == [batch, seqlen, encod_dim]
@@ -54,32 +54,42 @@ class VariationalAutoEncoder(nn.Module):
         cell = torch.zeros(x.size(0), self.decoder_dim).to(self.device)
         return (hidden,cell)
 
-    def autoregressive_decoding(self, encoded):
+    def autoregressive_decoding(self, encoded, train_mode):
 
         hn, cn = self.init_hidden(encoded)
-        decoded_tokens = []
         decoded_logits = []
-
+        decoder_hidden = []
+        if not train_mode:
+            decoded_tokens = []
+        else:
+            decoded_tokens = None
+            
         for idx in range(MAX_SENT_LEN):
-            output, c_n = self.decoder(encoded, (hn, cn))
-            logits = self.linear_decoder(output)
-            tokens = torch.argmax(self.decoder_softmax(logits), dim = -1)
-            decoded_tokens.append(tokens)
+            hn, cn = self.decoder(encoded, (hn, cn))
+            decoder_hidden.append(self.re_embedding_layer(hn))
+            logits = self.linear_decoder(hn)
+            if not train_mode:
+                tokens = torch.argmax(self.decoder_softmax(logits), dim = -1)
+                decoded_tokens.append(tokens)
             decoded_logits.append(logits)
-        
-        decoded_tokens = torch.stack((decoded_tokens))
+            
+        if not train_mode:
+            decoded_tokens = torch.stack((decoded_tokens))
         decoded_logits = torch.stack((decoded_logits))
+        decoder_hidden = torch.stack((decoder_hidden))
 
-        return decoded_tokens, decoded_logits
+        return decoded_tokens, decoded_logits, decoder_hidden
 
     
-    def forward(self, x, x_lens):
+    def forward(self, x, x_lens, train_mode = False):
 
         # x.shape = [batch_size, seq_len]
 
         t0 = time.time()
 
         embedded = self.embedding_layer(x)
+        embedded = self.dropout_layer(embedded)
+        embedded = self.layer_normalisation(embedded)
 
         t1 = time.time()
 
@@ -89,13 +99,20 @@ class VariationalAutoEncoder(nn.Module):
 
         # unpack sequence for further processing
         output, _ = torch.nn.utils.rnn.pad_packed_sequence(output, batch_first=True, total_length = max(x_lens))
+        
+        context = []
+        #batch_output is post_padded
+        for sequence, unpadded_len in zip(output, x_lens):
+            context.append(sequence[unpadded_len-1, :])
+        context = torch.stack((context))
 
         # dropout
-        output = self.dropout_layer(output)
+        #output = self.dropout_layer(output)
 
         # get the last hidden state (of the sequence) of the encoder
         # output.shape = [batch, seqlen, encoder_dim]
-        output = output[:, -1, :]
+        #output = output[:, -1, :]
+        output = context
 
         t2 = time.time()
 
@@ -109,7 +126,7 @@ class VariationalAutoEncoder(nn.Module):
         t4 = time.time()
 
         # autoregressive decoding
-        decoded_tokens, decoded_logits = self.autoregressive_decoding(encoded)
+        decoded_tokens, decoded_logits, _ = self.autoregressive_decoding(encoded, train_mode)
 
         t5 = time.time()
 
