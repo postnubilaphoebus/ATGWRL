@@ -9,7 +9,7 @@ def encoder_loss(model, encoded, re_embedded, x_lens, loss_fn = None):
         loss_fn = torch.nn.MSELoss(reduction='none')
     
     with torch.no_grad():
-        c_prime = model.encoder(re_embedded, x_lens)
+        c_prime, _ = model.encoder(re_embedded, x_lens, skip_embed = True)
         
     c_base = encoded
                 

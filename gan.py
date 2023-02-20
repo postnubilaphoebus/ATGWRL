@@ -37,6 +37,13 @@ class Critic(nn.Module):
         self.net = nn.Sequential(
             *[Block(block_dim) for _ in range(n_layers)]
         )
+        
+    def load(self, backup):
+        for m_from, m_to in zip(backup.modules(), self.modules()):
+             if isinstance(m_to, nn.Linear):
+                m_to.weight.data = m_from.weight.data.clone()
+                if m_to.bias is not None:
+                    m_to.bias.data = m_from.bias.data.clone()  
 
     def forward(self, x):
         return self.net(x)
