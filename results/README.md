@@ -13,7 +13,7 @@ Optimizer = Adam <br>
 Betas = (0.9, 0.999) <br>
 word_embedding = 200 <br>
 Lambda = 0.2 <br>
-Loss = (1 - Lambda) * Reconstruction_error + Lambda * Encoder_loss (as given by Oshri and Khandwala) <br> <br> <br>
+Loss = (1 - Lambda) * Reconstruction_error + Lambda * Encoder_loss (as given by Oshri and Khandwala) <br> <br> 
 
 ### Training details for GAN <br>
 Data seubset = 200,000 sentences <br>
