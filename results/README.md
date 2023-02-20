@@ -24,3 +24,5 @@ n_layers = 10  <br>
 critic_lr = generator_lr = 1e-4 <br>
 Optimizer = Adam <br>
 Betas = (0.5, 0.9) <br>
+
+![AE_loss](https://github.com/postnubilaphoebus/ATGWRL/blob/main/results/Autoencoder%20loss%20after%2064000%20batches.png)
