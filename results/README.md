@@ -2,7 +2,7 @@
 Vocab_size = 20_000 <br>
 Dataset subset = 600,000 sentences <br>
 Batch size = 64 <br>
-Epochs = 7
+Epochs = 7 <br>
 Maximum sentence length = 28 <br>
 encoder_dim = 100 <br>
 decoder_dim = 600 <br>
@@ -20,7 +20,7 @@ Data seubset = 200,000 sentences <br>
 Batch size = 64 <br>
 Epochs = 30 <br>
 Layer_dim = 100 <br>
-n_layers = 10 
+n_layers = 10  <br>
 critic_lr = generator_lr = 1e-4 <br>
 Optimizer = Adam <br>
 Betas = (0.5, 0.9) <br>
