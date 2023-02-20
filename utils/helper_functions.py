@@ -133,10 +133,11 @@ def tokenize_data(tokenizer, plain_path = "data/bookcorpus_plain.txt", ids_path 
         print("Files created. Found {} sentences", cnt)
         return
 
-def my_plot(epochs, re_list, kl_div_list, kl_weight_list):
+def my_plot(epochs, re_list, encoder_loss_list):
     re_list = np.array(re_list)
-    kl_div_list = np.array(kl_div_list)
-    kl_weight_list = np.array(kl_weight_list)
+    encoder_loss_list = np.array(encoder_loss_list)
+    #kl_div_list = np.array(kl_div_list)
+    #kl_weight_list = np.array(kl_weight_list)
 
     current_directory = os.getcwd()
     directory = os.path.join(current_directory, r'plotted_losses')
@@ -154,7 +155,7 @@ def my_plot(epochs, re_list, kl_div_list, kl_weight_list):
     epochs = np.array(epochs)
     
     plt.plot(epochs, re_list, label = 'reconstruction error')
-    plt.plot(epochs, kl_div_list, label = 'encoder loss (scaled by 50 for visual)')
+    plt.plot(epochs, encoder_loss_list, label = 'encoder loss (scaled by 5 for visual)')
     #plt.plot(epochs, kl_weight_list, label = 'kl weight')
     
     #plt.yscale('log')
@@ -323,14 +324,19 @@ def load_names(names_path):
         name_list.append(line)
     return name_list
 
-def load_data_from_file(data_path, debug = False, retain_validation = True):
+def load_data_from_file(data_path, max_num_of_sents = None, debug = False, retain_validation = True):
     cwd = os.getcwd()
     data_path = os.path.join(cwd, data_path)
     
-    print("loading data ids... (est time 3 mins)")
+    if max_num_of_sents:
+        print("loading data ids... (only {} sentences)".format(max_num_of_sents))
+    else:
+        print("loading data ids... (est time 3 mins)")
     t1 = time.time()
     data = []
     data_file = open(data_path, 'r')
+    
+    counter = 0
 
     while True:
         line = data_file.readline()
@@ -341,6 +347,10 @@ def load_data_from_file(data_path, debug = False, retain_validation = True):
         line = line.split(",")
         line = [int(x) for x in line]
         data.append(line)
+        if max_num_of_sents:
+            counter += 1
+            if counter >= max_num_of_sents:
+                break
         
     data_file.close()
     t2 = time.time()
