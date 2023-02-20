@@ -34,5 +34,33 @@ GAN loss graph:
 Critic scores:
 ![Critic_scores](https://github.com/postnubilaphoebus/ATGWRL/blob/main/results/Plotted%20accs%20after%20895batches%20(in%20100s).png)
 
+Example Outputs: <br> <br>
+
+random seed: 0 <br> <br>
+
+the that had had that it was . <br>
+i was done and with it . <br>
+he sent to him back . <br>
+he never begged his back . <br>
+there was all about about things she 'd about him . <br>
+he was just the man . <br>
+he would let to let it to to him . <br>
+he could thought it was about it . <br>
+she 'd have like the way way ? . <br>
+luis laughed and and and opened him . <br>
+
+random seed: 42 <br> <br>
+
+he knew luis he n't believe it . <br>
+luis had to bother that . . <br>
+yes , luis was with the door and the time . <br>
+she shook him him that of the the face . <br>
+she was good really good . <br>
+for he 'd thought for to to him ? <br>
+he was myself and open before . <br>
+he could n't give the man to . <br>
+jase did n't think that . . <br>
+he guided luis off jase forward . <br>
+
 
 
