@@ -25,10 +25,14 @@ critic_lr = generator_lr = 1e-4 <br>
 Optimizer = Adam <br>
 Betas = (0.5, 0.9) <br>
 
-Autoencoder loss graph: <br>
+Autoencoder loss graph: 
 ![AE_loss](https://github.com/postnubilaphoebus/ATGWRL/blob/main/results/Autoencoder%20loss%20after%2064000%20batches.png)
 
-GAN loss graph: <br>
+GAN loss graph: 
 ![GAN_loss](https://github.com/postnubilaphoebus/ATGWRL/blob/main/results/Plotted%20GAN%20loss%20after%20895batches%20(in%20100s).png)
+
+Critic scores:
+![Critic_scores] (https://github.com/postnubilaphoebus/ATGWRL/blob/main/results/Plotted%20accs%20after%20895batches%20(in%20100s).png)
+
 
 
