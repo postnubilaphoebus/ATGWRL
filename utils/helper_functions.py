@@ -1,9 +1,11 @@
 from datasets import load_dataset
-from nltk.tokenize import WhitespaceTokenizer
+from nltk.tokenize import WhitespaceTokenizer, TreebankWordTokenizer
 import os.path
 from tqdm import tqdm
+import sys
 import regex as re
 import numpy as np
+import math
 import time
 import torch
 import truecase
@@ -27,49 +29,64 @@ MAX_TOKEN_LENGTH = 28
 
 common_nes ={"PERSON": "PERSON_token", "ORG": "ORG_token", "GPE": "GPE_token"}
 
-CONTRACTION_MAP = {"ain't": "is not", "aren't": "are not", "can't": "cannot",
-                   "can't've": "cannot have", "'cause": "because", "could've": "could have",
-                   "couldn't": "could not", "couldn't've": "could not have", "didn't": "did not",
-                   "doesn't": "does not", "don't": "do not", "hadn't": "had not",
-                   "hadn't've": "had not have", "hasn't": "has not", "haven't": "have not",
-                   "he'd": "he would", "he'd've": "he would have", "he'll": "he will",
-                   "he'll've": "he he will have", "he's": "he is", "how'd": "how did",
-                   "how'd'y": "how do you", "how'll": "how will", "how's": "how is",
-                   "I'd": "I would", "I'd've": "I would have", "I'll": "I will",
-                   "I'll've": "I will have", "I'm": "I am", "I've": "I have",
-                   "i'd": "i would", "i'd've": "i would have", "i'll": "i will",
-                   "i'll've": "i will have", "i'm": "i am", "i've": "i have",
-                   "isn't": "is not", "it'd": "it would", "it'd've": "it would have",
-                   "it'll": "it will", "it'll've": "it will have", "it's": "it is",
-                   "let's": "let us", "ma'am": "madam", "mayn't": "may not",
-                   "might've": "might have", "mightn't": "might not", "mightn't've": "might not have",
-                   "must've": "must have", "mustn't": "must not", "mustn't've": "must not have",
-                   "needn't": "need not", "needn't've": "need not have", "o'clock": "of the clock",
-                   "oughtn't": "ought not", "oughtn't've": "ought not have", "shan't": "shall not",
-                   "sha'n't": "shall not", "shan't've": "shall not have", "she'd": "she would",
-                   "she'd've": "she would have", "she'll": "she will", "she'll've": "she will have",
-                   "she's": "she is", "should've": "should have", "shouldn't": "should not",
-                   "shouldn't've": "should not have", "so've": "so have", "so's": "so as",
-                   "this's": "this is",
-                   "that'd": "that would", "that'd've": "that would have", "that's": "that is",
-                   "there'd": "there would", "there'd've": "there would have", "there's": "there is",
-                   "they'd": "they would", "they'd've": "they would have", "they'll": "they will",
-                   "they'll've": "they will have", "they're": "they are", "they've": "they have",
-                   "to've": "to have", "wasn't": "was not", "we'd": "we would",
-                   "we'd've": "we would have", "we'll": "we will", "we'll've": "we will have",
-                   "we're": "we are", "we've": "we have", "weren't": "were not",
-                   "what'll": "what will", "what'll've": "what will have", "what're": "what are",
-                   "what's": "what is", "what've": "what have", "when's": "when is",
-                   "when've": "when have", "where'd": "where did", "where's": "where is",
-                   "where've": "where have", "who'll": "who will", "who'll've": "who will have",
-                   "who's": "who is", "who've": "who have", "why's": "why is",
-                   "why've": "why have", "will've": "will have", "won't": "will not",
-                   "won't've": "will not have", "would've": "would have", "wouldn't": "would not",
-                   "wouldn't've": "would not have", "y'all": "you all", "y'all'd": "you all would",
-                   "y'all'd've": "you all would have", "y'all're": "you all are", "y'all've": "you all have",
-                   "you'd": "you would", "you'd've": "you would have", "you'll": "you will",
-                   "you'll've": "you will have", "you're": "you are", "you've": "you have", "here's": "here is",
-                   "here're": "here are", "'d": "had", "'s": "is", "n't": "not"}
+def inverse_sigmoid_schedule(iterations, sigmoid_rate):
+    a = sigmoid_rate/(sigmoid_rate + math.exp(iterations/sigmoid_rate))
+    return a
+
+def autoencoder_info(model, config):
+    print("voab size:", config.vocab_size)
+    print("batch_size:", config.ae_batch_size)
+    print("latent dimension:", config.latent_dim)
+    print("layer normalisation:", config.layer_norm)
+    print("word embedding size:", config.word_embedding)
+    print("dropout probability:", config.dropout_prob)
+    print("learning rate:", config.ae_learning_rate)
+    print("ae betas:", *config.ae_betas)
+    if model.name == "default_autoencoder":
+        print("using pretrained embedding:", config.pretrained_embedding)
+        print("bidirectional:", config.bidirectional)
+        print("attention:", config.attn_bool)
+        if config.attn_bool:
+            print("attention heads:", config.num_attn_heads)
+        print("encoder dimension:", config.encoder_dim)
+        print("decoder dimension:", config.decoder_dim)
+    elif model.name == "cnn_autoencoder":
+        print("max_pool_kernel:", config.max_pool_kernel)
+        print("kernel_sizes:", *config.kernel_sizes)
+        print("out channels:", config.out_channels)
+    else:
+        pass
+
+
+def matrix_from_pretrained_embedding(vocab, vocab_size, emb_dim, pretrained_embed):
+    weights_matrix = np.random.uniform(-0.25, 0.25, (vocab_size, emb_dim))
+    words_found = 0
+    for i, word in enumerate(vocab):
+        word_present = torch.count_nonzero(pretrained_embed[word]).item()
+        if word_present > 0:
+            weights_matrix[i] = pretrained_embed[word]
+            words_found += 1
+        else:
+            weights_matrix[i] = np.random.normal(scale=0.6, size=(emb_dim, ))
+    return torch.from_numpy(weights_matrix)
+
+def load_ae(model, model_name = 'epoch_5_model.pth'):
+    print("Loading pretrained ae...")
+    model_name = 'epoch_5_model.pth'
+    base_path = '/content/gdrive/MyDrive/ATGWRL/'
+    saved_models_dir = os.path.join(base_path, r'saved_aes')
+    model_name_path = os.path.join(saved_models_dir, model_name)
+
+    if os.path.exists(saved_models_dir):
+        if os.path.isfile(model_name_path):
+            model.load_state_dict(torch.load(model_name_path), strict = False)
+        else:
+            sys.exit("AE model path does not exist")
+    else:
+        sys.exit("AE path does not exist")
+
+    return model
+
 
 def create_bpe_tokenizer(tokenizer_path = "data/tokenizer-toronto.json"):
     tokenizer_path = "data/tokenizer-toronto.json"
@@ -123,7 +140,7 @@ def tokenize_data(tokenizer, plain_path = "data/bookcorpus_plain.txt", ids_path 
             if not line:
                 break
             cnt += 1
-            encoded_line = tk.encode(line)
+            encoded_line = tokenizer.encode(line)
             ids = [str(x) for x in encoded_line.ids]
             if len(ids) > MAX_TOKEN_LENGTH:
                 continue
@@ -133,9 +150,9 @@ def tokenize_data(tokenizer, plain_path = "data/bookcorpus_plain.txt", ids_path 
         print("Files created. Found {} sentences", cnt)
         return
 
-def my_plot(epochs, re_list, encoder_loss_list):
+def my_plot(epochs, re_list):
     re_list = np.array(re_list)
-    encoder_loss_list = np.array(encoder_loss_list)
+    #encoder_loss_list = np.array(encoder_loss_list)
     #kl_div_list = np.array(kl_div_list)
     #kl_weight_list = np.array(kl_weight_list)
 
@@ -155,7 +172,7 @@ def my_plot(epochs, re_list, encoder_loss_list):
     epochs = np.array(epochs)
     
     plt.plot(epochs, re_list, label = 'reconstruction error')
-    plt.plot(epochs, encoder_loss_list, label = 'encoder loss (scaled by 5 for visual)')
+    #plt.plot(epochs, encoder_loss_list, label = 'encoder loss (scaled by 5 for visual)')
     #plt.plot(epochs, kl_weight_list, label = 'kl weight')
     
     #plt.yscale('log')
@@ -165,6 +182,32 @@ def my_plot(epochs, re_list, encoder_loss_list):
     plt.legend()
     plt.savefig(final_directory, dpi=300)
     plt.close()
+
+# https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+# from https://stackoverflow.com/questions/56402955/whats-the-formula-for-welfords-algorithm-for-variance-std-with-batch-updates
+def update(existingAggregate, newValues):
+    if isinstance(newValues, (int, float, complex)):
+        # Handle single digits.
+        newValues = [newValues]
+
+    (count, mean, M2) = existingAggregate
+    count += len(newValues) 
+    # newvalues - oldMean
+    delta = np.subtract(newValues, [mean] * len(newValues))
+    mean += np.sum(delta / count)
+    # newvalues - newMeant
+    delta2 = np.subtract(newValues, [mean] * len(newValues))
+    M2 += np.sum(delta * delta2)
+
+    return (count, mean, M2)
+
+def finalize(existingAggregate):
+    (count, mean, M2) = existingAggregate
+    (mean, variance, sampleVariance) = (mean, M2/count, M2/(count - 1)) 
+    if count < 2:
+        return float('nan')
+    else:
+        return (mean, variance, sampleVariance)
 
 def model_usage_by_layer(time_list):
     total_time = sum(time_list)
@@ -178,19 +221,22 @@ def model_usage_by_layer(time_list):
     print("Model times by percentage: Embedding {} | Encoder {} | Code Layer {} | Reparam {} | Decoding {}".format(embedding_time, encoder_plus_dropout_time, code_layer_time, reparam_time, decoding_time))
                    
 def sub_ner_tokens(sentence, nlp):
+    # replace Person, Organisation, and location tokens
+    # with placeholder tokens for easier processing
     common_nes ={"PERSON": "PERSON_token", "ORG": "ORG_token", "GPE": "GPE_token"}
-    sentence = WhitespaceTokenizer().tokenize(sentence)
-    
-
-    # +1 cause spacy requires joining str with spaces
-    word_lens = [len(x) + 1 for x in sentence] 
-    word_lens[-1] = word_lens[-1] - 1
-
-    character_pos = [sum(word_lens[:i]) for i in range(len(word_lens))]
-    s = ' '.join(sentence)
+    #sentence = WhitespaceTokenizer().tokenize(sentence)
 
     # casing required for NER
-    s_upper = truecase.get_true_case(s)
+    s_upper = truecase.get_true_case(sentence)
+    s_upper_tokenized = TreebankWordTokenizer().tokenize(s_upper)
+
+    # +1 cause spacy requires joining str with spaces
+    word_lens = [len(x) + 1 for x in s_upper_tokenized] 
+    word_lens[-1] = word_lens[-1] - 1
+    character_pos = [sum(word_lens[:i]) for i in range(len(word_lens))]
+
+    s_upper = ' '.join(s_upper_tokenized)
+
     doc = nlp(s_upper)
 
     labels = [ent.label_ for ent in doc.ents]
@@ -220,7 +266,10 @@ def sub_ner_tokens(sentence, nlp):
     random.shuffle(temp)
 
     for idx, ne, rd_idx in zip(token_start_idx, relevant_ne, temp):
-        sentence[idx] = ne + str(rd_idx)
+        s_upper_tokenized[idx] = ne + str(rd_idx)
+
+    sentence = ' '.join(s_upper_tokenized)
+    sentence = sentence.lower()
 
     return sentence
 
@@ -233,6 +282,21 @@ def save_model(epoch, model):
     filename = 'epoch_' + str(epoch) + '_model.pth'
     final_directory = os.path.join(directory, filename)
     torch.save(model.state_dict(), final_directory)
+
+def word_deletion(batch, prob = 0.3):
+    new_batch = []
+    for sentence in batch:
+        new_sentence = []
+        for word in sentence:
+            rand_float = random.uniform(0, 1)
+            if rand_float > prob:
+                new_sentence.append(word)
+        if not new_sentence:
+            new_sentence.append(sentence[0])
+
+        new_batch.append(new_sentence)
+    
+    return new_batch
 
 def real_lengths(unpadded_list):
     sent_lens = [len(i) for i in unpadded_list]
@@ -269,7 +333,11 @@ def reformat_decoded_batch(decoded_batch, pad_id):
     max_len = MAX_SENT_LEN
     reformatted_batch = []
     for element in decoded_batch:
-        first_zero = element.index(pad_id)
+        try:
+            first_zero = element.index(pad_id)
+        except:
+            first_zero = len(element)
+
         element = element[:first_zero]
         if len(element) < max_len:
             element = element + [0] * (max_len - len(element))
@@ -356,13 +424,6 @@ def load_data_from_file(data_path, max_num_of_sents = None, debug = False, retai
     t2 = time.time()
     print("loading data ids took {:.2f} seconds".format(t2-t1))
     return data
-
-def pychant_lookup(word, human_names, american_words, special_tokens):
-    if word == "num000" or word in human_names or word in special_tokens or american_words.check(word) or american_words.check(word.upper()):
-        return True
-    if CONTRACTION_MAP.get(word):
-        return True
-    return False
         
 def load_data_and_create_vocab(dataset = "bookcorpus", word_freq_cutoff = 5, vocab_path = "vocab.txt", names_path = "names.txt"):
 
@@ -398,7 +459,7 @@ def load_data_and_create_vocab(dataset = "bookcorpus", word_freq_cutoff = 5, voc
                     else:
                         word_freqs[word] += 1
 
-        word_freqs = {k: v for k, v in word_freqs.items() if pychant_lookup(k, human_names, american_words, special_tokens)}
+        word_freqs = {k: v for k, v in word_freqs.items()}
         unfiltered_len = len(word_freqs)
         print("number of words (without filtering)", unfiltered_len)
 
@@ -474,6 +535,8 @@ def prepare_data(dset, vocab, vocab_path = "vocab.txt", data_ids = "bookcorpus_i
         return sum(1 for line in open(data_ids))
 
 def yieldBatch(batch_size, data):
+    # lazy iterator for batches
+    # PARAMS: batch_size, data
     sindex=0
     eindex=batch_size
     while eindex < len(data):
@@ -483,4 +546,10 @@ def yieldBatch(batch_size, data):
         sindex = temp
         
         yield batch
-    
+
+def sample_batch(batch_size, data):
+    # sampling batch from data with replacement
+    # PARAMS: batch_size, data
+    sample_num = random.randint(0, len(data) - batch_size - 1)
+    data_batch = data[sample_num:sample_num+batch_size]
+    return data_batch
