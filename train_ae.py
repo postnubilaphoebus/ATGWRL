@@ -1,10 +1,10 @@
-from ae import AutoEncoder
-from loss_functions import encoder_loss, reconstruction_loss
+from models import AutoEncoder, CNNAutoEncoder
+from loss_functions import reconstruction_loss, validation_set_acc
 import torch
 import random
-import os
-import sys
-import math
+import numpy as np
+import warnings
+import torchtext
 from utils.helper_functions import yieldBatch, \
                                    load_data_from_file, \
                                    real_lengths, \
@@ -13,187 +13,189 @@ from utils.helper_functions import yieldBatch, \
                                    save_model, \
                                    pad_batch_and_add_EOS, \
                                    my_plot, \
-                                   create_bpe_tokenizer, \
-                                   tokenize_data, \
-                                   load_vocab
-                                   
-def load_ae(config):
-    print("Loading pretrained ae...")
-    model_3 = 'epoch_5_model.pth'
-    base_path = '/content/gdrive/MyDrive/ATGWRL/'
-    saved_models_dir = os.path.join(base_path, r'saved_aes')
-    model_3_path = os.path.join(saved_models_dir, model_3)
-    model = AutoEncoder(config)
-    model.to(config.device)
+                                   matrix_from_pretrained_embedding, \
+                                   load_vocab, \
+                                   autoencoder_info
 
-    if os.path.exists(saved_models_dir):
-        if os.path.isfile(model_3_path):
-            model.load_state_dict(torch.load(model_3_path), strict = False)
-        else:
-            sys.exit("AE model path does not exist")
-    else:
-        sys.exit("AE path does not exist")
+def config_performance(config, label_smoothing, bleu4, val_loss, model_name):
+    with open("ae_results.txt", "a") as f:
+        f.write("##################################################################################################################################" + "\n")
+        f.write("model name: {}, lr: {}, attn: {}, drop: {}, layer_norm: {}, lbl_smooth: {}, enc_dim: {}"
+                .format(model_name,
+                        str(config.ae_learning_rate), 
+                        str(config.attn_bool), 
+                        str(config.dropout_prob), 
+                        str(config.layer_norm),
+                        str(label_smoothing), 
+                        str(config.encoder_dim)))
+        f.write("\n")
+        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n" + "\n")
+        f.close()
 
-    return model
-    
-def inverse_sigmoid_schedule(i, k):
-    a = k/(k + math.exp(i/k))
-    return a
-    
-def validation_set_acc(config, model, val_set):
-    re_list = []
-    for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, val_set)):
-        original_lens_batch = real_lengths(batch)
-        padded_batch = pad_batch(batch)
-        targets = pad_batch_and_add_EOS(batch)
-        weights = return_weights(original_lens_batch)
-
-        weights = torch.FloatTensor(weights).to(model.device)
-        padded_batch = torch.LongTensor(padded_batch).to(model.device)
-        targets = torch.LongTensor(targets).to(model.device)
-        
-        with torch.no_grad():
-            decoded_logits = model(padded_batch, original_lens_batch)
-
-            reconstruction_error = reconstruction_loss(weights, targets, decoded_logits)
-            
-        re_list.append(reconstruction_error.item())
-        
-    val_error = sum(re_list) / len(re_list)
-    print("val_error", val_error)
-    
-    return val_error
+def config_performance_cnn(config, label_smoothing, bleu4, val_loss, model_name):
+    with open("ae_cnn_results.txt", "a") as f:
+        f.write("##################################################################################################################################" + "\n")
+        f.write("model name {}, lr {}, drop {}, kernel1 {}, kernel2 {}, out channels {}, label smoothing {}"
+                .format(model_name,
+                        str(config.ae_learning_rate),
+                        str(config.dropout_prob),
+                        str(config.kernel_sizes[0]),
+                        str(config.kernel_sizes[1]),
+                        str(config.out_channels),
+                        str(label_smoothing))) 
+        f.write("\n")
+        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n" + "\n")
+        f.close()
 
 def train(config, 
-          num_epochs = 7,
+          num_epochs = 4,
+          model_name = "default_autoencoder",
+          data_path = "corpus_v20k_ids.txt",
+          vocab_path = "vocab_20k.txt", 
           logging_interval = 100, 
-          saving_interval = 5000,
-          plotting_interval = 2000,
+          saving_interval = 10_000,
+          plotting_interval = 10_000,
           enc_loss_lambda = 0.2,
-          validation_size = 10_000):
+          validation_size = 1000,
+          random_seed = 42):
     
-    data_path = "corpus_v20k_ids.txt"
-    vocab_path = "vocab_20k.txt"
-    print("loading data: {} and vocab: {}".format(data_path, vocab_path))
-    
-    reduced_data_size = 600_000
-    print("reduced_data_size", reduced_data_size)
-    
-    data = load_data_from_file(data_path, reduced_data_size + validation_size)
+    random.seed(random_seed)
+    torch.manual_seed(random_seed)
+    np.random.seed(random_seed)
+
+    print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
+    data = load_data_from_file(data_path, 100_000)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
     vocab, revvocab = load_vocab(vocab_path)
     config.vocab_size = len(revvocab)
-    random.seed(10)
-    kl_annealing_iters = 20_000
-    kl_annealing_iters = kl_annealing_iters // (config.ae_batch_size / 100)
 
-    model = AutoEncoder(config)
-    model = model.apply(AutoEncoder.init_weights)
-    model.to(model.device)
-    #print("reloading model 5")
-    #model = load_ae(config)
-    #num_epochs = 2
-    # print("changed epochs to ", num_epochs)
-    sigmoid_rate = (data_len * num_epochs / config.ae_batch_size) / 23
+    config.pretrained_embedding = True
+    if config.pretrained_embedding == True:
+        assert config.word_embedding == 300, "glove embedding can only have dim 300, change config"
+        glove = torchtext.vocab.GloVe(name='42B', dim=300) # 42B is uncased
+        weights_matrix = matrix_from_pretrained_embedding(list(vocab.keys()), config.vocab_size, config.word_embedding, glove)
+    else:
+        weights_matrix = None
 
-    optimizer = torch.optim.Adam(lr = config.ae_learning_rate, 
-                                 params = model.parameters(),
-                                 betas = (0.9, 0.999),
-                                 eps=1e-08)
+    lr_list = [1e-3, 7e-4, 5e-4]
+    dropout_prob_list = [0.5, 0.6, 0.7]
+    #layer_norm_list = [True, False]
+    label_smoothing_list = [None, 0.1, 0.2, 0.3]
+    #encoder_dim_list = [100, 300, 600]
+    kernel_sizes = [3, 9, 13, 17]
+    out_channels = [10, 30, 100]
 
-    scaler = torch.cuda.amp.GradScaler(enabled=True)
+    model_name = "cnn_autoencoder"
 
-    log_dict = {'train_combined_loss_per_batch': [],
-                'train_combined_loss_per_epoch': [],
-                'train_reconstruction_loss_per_batch': [],
-                'train_kl_loss_per_batch': []} 
-        
-    model.train()
-    
-    print("Starting AE training. Number of training epochs {}, batch_size {}".format(num_epochs, config.ae_batch_size))
-    print("Logging interval: ", logging_interval)
+    for _ in range(2):
+        config.ae_learning_rate = random.choice(lr_list)
+        #config.attn_bool = False
+        config.dropout_prob = random.choice(dropout_prob_list)
+        #config.layer_norm = random.choice(layer_norm_list)
+        label_smoothing = random.choice(label_smoothing_list)
+        #config.encoder_dim = random.choice(encoder_dim_list)
+        config.kernel_sizes[0] = random.choice(kernel_sizes)
+        config.kernel_sizes[1] = random.choice(kernel_sizes)
+        config.out_channels = random.choice(out_channels)
 
-    #if kl_annealing_iters is not None:
-        #print("Peforming monotonic KL annealing for first {} batches".format(kl_annealing_iters))
-        
-        
-    assert config.latent_dim == config.block_dim, "GAN block dimension and latent dimension must be equal"
+        if model_name == "default_autoencoder":
+            model = AutoEncoder(config, weights_matrix)
+            model = model.apply(AutoEncoder.init_weights)
+            model.to(model.device)
+        elif model_name == "cnn_autoencoder":
+            model = CNNAutoEncoder(config, weights_matrix)
+            model = model.apply(CNNAutoEncoder.init_weights)
+            model.to(model.device)
+        else:
+            warnings.warn("Provided invalid model name. Loading default autoencoder...")
+            model = AutoEncoder(config, weights_matrix)
+            model = model.apply(AutoEncoder.init_weights)
+            model.to(model.device)
 
-    kl_annealing_counter = 0
-    re_list = []
-    encoder_loss_list = []
-    kl_div_list = []
-    kl_weight_list = []
-    
-    print("enc_loss_lambda {}".format(enc_loss_lambda))
-    val_error_per_epoch = []
-    
-    print("encoder dim {}, decoder dim {}, latent_dim {}, input dropout {}, lr {}, embedding size {}, vocab size {}, batch size {}".format(config.encoder_dim, config.decoder_dim, config.latent_dim, config.dropout_prob, config.ae_learning_rate, config.word_embedding, config.vocab_size, config.ae_batch_size))
+        optimizer = torch.optim.Adam(lr = config.ae_learning_rate, 
+                                    params = model.parameters(),
+                                    betas = (config.ae_betas[0], config.ae_betas[1]),
+                                    eps=1e-08)
+                                    
+        scaler = torch.cuda.amp.GradScaler(enabled=True)
 
-    for epoch_idx in range(num_epochs):
-        for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
-            kl_weight = 1 if kl_annealing_counter > kl_annealing_iters else kl_annealing_counter / kl_annealing_iters 
-            kl_annealing_counter += 1
+        log_dict = {'train_combined_loss_per_batch': [],
+                    'train_combined_loss_per_epoch': [],
+                    'train_reconstruction_loss_per_batch': [],
+                    'train_kl_loss_per_batch': []} 
             
-            #teacher_force_prob = inverse_sigmoid_schedule(kl_annealing_counter, sigmoid_rate)
-            teacher_force_prob = 0
+        model.train()
 
-            original_lens_batch = real_lengths(batch)
-            padded_batch = pad_batch(batch)
-            targets = pad_batch_and_add_EOS(batch)
-            weights = return_weights(original_lens_batch)
+        print("######################################################")
+        print("######################################################")
+        print("Starting AE training. Number of training epochs: {}".format(num_epochs))
+        print("Logging interval:", logging_interval)
+        assert config.latent_dim == config.block_dim, "GAN block dimension and latent dimension must be equal"
+        iter_counter = 0
+        re_list = []
 
-            weights = torch.FloatTensor(weights).to(model.device)
-            padded_batch = torch.LongTensor(padded_batch).to(model.device)
-            targets = torch.LongTensor(targets).to(model.device)
+        config.ae_batch_size = 64
 
-            with torch.cuda.amp.autocast():
+        autoencoder_info(model, config)
+        print("######################################################")
+        print("######################################################")
 
-                decoded_logits, z, re_embedded = model(padded_batch, original_lens_batch, teacher_force_prob)
-
-                reconstruction_error = reconstruction_loss(weights, targets, decoded_logits)
-                e_loss = encoder_loss(model, z, re_embedded, original_lens_batch)
+        for epoch_idx in range(num_epochs):
+            for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
+                #kl_weight = 1 if iter_counter > kl_annealing_iters else iter_counter / kl_annealing_iters 
+                iter_counter += 1
                 
-                loss = (1 - enc_loss_lambda) * reconstruction_error + enc_loss_lambda * e_loss 
-                
-                re_list.append(reconstruction_error.item())
-                encoder_loss_list.append(e_loss.item() * 5)
-                #kl_div_list.append(e_loss.item() * 50)
-                #kl_weight_list.append(0)
+                #teacher_force_prob = inverse_sigmoid_schedule(iter_counter, sigmoid_rate)
+                teacher_force_prob = 0
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
+                original_lens_batch = real_lengths(batch)
+                padded_batch = pad_batch(batch)
+                targets = pad_batch_and_add_EOS(batch)
+                weights = return_weights(original_lens_batch)
 
-            # LOGGING
-            log_dict['train_combined_loss_per_batch'].append(loss.item())
-            log_dict['train_reconstruction_loss_per_batch'].append(reconstruction_error.item())
+                weights = torch.FloatTensor(weights).to(model.device)
+                padded_batch = torch.LongTensor(padded_batch).to(model.device)
+                targets = torch.LongTensor(targets).to(model.device)
 
-            if batch_idx % logging_interval == 0:
-                progress = ((batch_idx+1) * config.ae_batch_size / data_len / num_epochs) + (epoch_idx / num_epochs)
-                progress = progress * 100
-                print('Progress {:.4f}% | Epoch {} | Batch {} | Loss {:.10f} | Reconstruction Error {:.10f} | Encoder loss {:.10f}'.format(progress, epoch_idx, batch_idx, loss.item(), reconstruction_error.item(), e_loss.item()))
+                with torch.cuda.amp.autocast():
 
-            if kl_annealing_counter % saving_interval == 0 and kl_annealing_counter > 0:
-                print("Progress: {}, saving model...".format(progress))
-                save_model(epoch_idx, model)
-                
-            if kl_annealing_counter > 0 and kl_annealing_counter % plotting_interval == 0:
-                my_plot(len(re_list), re_list, encoder_loss_list)
+                    decoded_logits = model(padded_batch, original_lens_batch, teacher_force_prob)
+
+                    reconstruction_error = reconstruction_loss(weights, targets, decoded_logits, label_smoothing = label_smoothing)
                     
-        #val_error = validation_set_acc(config, model, val)
-        #val_error_per_epoch.append(val_error)
+                    loss = reconstruction_error 
                     
-    print("Training complete, saving model")
-    #print("val error per epoch")
-    #for i in range(len(val_error_per_epoch)):
-        #print(val_error_per_epoch[i])
-    #epoch_idx = num_epochs
-    #epoch_idx = 5
-    save_model(epoch_idx, model)
-    my_plot(len(re_list), re_list, encoder_loss_list)
+                    re_list.append(reconstruction_error.item())
+
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=False)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+                # LOGGING
+                log_dict['train_combined_loss_per_batch'].append(loss.item())
+                log_dict['train_reconstruction_loss_per_batch'].append(reconstruction_error.item())
+
+                if iter_counter > 0 and iter_counter % logging_interval == 0:
+                    progress = ((batch_idx+1) * config.ae_batch_size / data_len / num_epochs) + (epoch_idx / num_epochs)
+                    progress = progress * 100
+                    print('Progress {:.4f}% | Epoch {} | Batch {} | Loss {:.10f} | Reconstruction Error {:.10f} | current lr: {:.6f}'\
+                        .format(progress,epoch_idx, batch_idx+1, loss.item(), reconstruction_error.item(), optimizer.param_groups[0]['lr']))
+                        
+        #print("Training complete, saving model")
+        #epoch_idx = 5
+        #save_model(epoch_idx, model)
+        #my_plot(len(re_list), re_list)
+        val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
+        config_performance_cnn(config, label_smoothing, bleu_score, val_error, model_name)
+        #config_performance(config, label_smoothing, bleu_score, val_error, model_name)
+
     return log_dict
