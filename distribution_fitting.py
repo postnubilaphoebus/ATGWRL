@@ -37,6 +37,20 @@ def load_model(config, model_name, model_path, weights_matrix = None):
         sys.exit("ae model path does not exist")
     return model
 
+def distribution_constraint(fitted_distribution, model_output):
+    generated_data = [(0, 0, 0)] * config.latent_dim
+    for idx, hidden in enumerate(model_output):
+        generated_data[idx] = update(generated_data[idx], hidden)
+    cnt = 0
+    constraint_sum = 0
+    for real_stats, gen_stats in zip(fitted_distribution, generated_data):
+        mu_diff = gen_stats[0] - real_stats[0]
+        sigma_diff = gen_stats[1] - gen_stats[1]
+        constraint_sum += (mu_diff + sigma_diff)
+        cnt += 1
+    constraint_loss = constraint_sum / cnt
+    return constraint_loss
+
 def distribution_fitting(config, 
                          model_name = "variational_autoencoder", 
                          model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_4_model_variational_autoencoder.pth", 
@@ -61,13 +75,18 @@ def distribution_fitting(config,
         padded_batch = pad_batch(batch)
         padded_batch = torch.LongTensor(padded_batch).to(model.device)
         with torch.no_grad():
-            output = model.encoder(padded_batch, original_lens_batch)
-            # extract last hidden state
-            context = []
-            for sequence, unpadded_len in zip(output, original_lens_batch):
-                context.append(sequence[unpadded_len-1, :])
-            context = torch.stack((context))
-            z = model.reparameterize(model.z_mean(context), model.z_log_var(context))
+            if model.name == "variational_autoencoder":
+                output = model.encoder(padded_batch, original_lens_batch)
+                # extract last hidden state
+                context = []
+                for sequence, unpadded_len in zip(output, original_lens_batch):
+                    context.append(sequence[unpadded_len-1, :])
+                context = torch.stack((context))
+                z = model.reparameterize(model.z_mean(context), model.z_log_var(context))
+            elif model.name == "cnn_autoencoder":
+                z, _ = model.encoder(padded_batch)
+            else:
+                z, _ = model.encoder(padded_batch, original_lens_batch)
             # [B, H] -> [H, B]
             z = torch.transpose(z, 1, 0)
             z = z.cpu().detach().numpy()
@@ -77,8 +96,11 @@ def distribution_fitting(config,
     # finalising mu and sigma
     for idx, elem in enumerate(result_batch):
         result_batch[idx] = finalize(elem)
-
     return result_batch
 
 if __name__ == "__main__":
-    fitted_distribution = distribution_fitting(config)
+    # TODO: transfer all computations to pytorch
+    fitted_distribution, data = distribution_fitting(config)
+    fitted_distribution = torch.FloatTensor(fitted_distribution).to(config.device)
+
+

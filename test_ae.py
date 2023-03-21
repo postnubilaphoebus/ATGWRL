@@ -1,5 +1,7 @@
-from models import AutoEncoder
+from models import AutoEncoder, CNNAutoEncoder, ExperimentalAutoencoder, VariationalAutoEncoder
 from nltk.translate.bleu_score import sentence_bleu
+from bert_score import score as bert_scoring
+from rouge_score import rouge_scorer
 import torch
 import os
 import sys
@@ -14,117 +16,99 @@ from utils.helper_functions import load_data_and_create_vocab, \
                                    return_weights, \
                                    save_model, \
                                    average_over_nonpadded, \
-                                   reformat_decoded_batch
+                                   reformat_decoded_batch, \
+                                   rouge_and_bleu, \
+                                   load_vocab, \
+                                   return_bert_score
 
-def load_ae(config):
-    print("Loading pretrained ae...")
-    model_5 = 'epoch_5_model.pth'
-    base_path = '/content/gdrive/MyDrive/ATGWRL/'
-    saved_models_dir = os.path.join(base_path, r'saved_aes')
-    model_10_path = os.path.join(saved_models_dir, model_5)
-    model = AutoEncoder(config)
-    model.to(config.device)
-
-    if os.path.exists(saved_models_dir):
-        if os.path.isfile(model_10_path):
-            #print("Loading pretrained gen...")
-            model.load_state_dict(torch.load(model_10_path), strict = False)
+def load_model(config, model_name, model_path, weights_matrix = None):
+    if os.path.isfile(model_path):
+        if model_name == "default_autoencoder":
+            model = AutoEncoder(config, weights_matrix)
+            model = model.apply(AutoEncoder.init_weights)
+            model.to(model.device)
+        elif model_name == "cnn_autoencoder":
+            model = CNNAutoEncoder(config, weights_matrix)
+            model = model.apply(CNNAutoEncoder.init_weights)
+            model.to(model.device)
+        elif model_name == "strong_autoencoder":
+            model = ExperimentalAutoencoder(config, weights_matrix)
+            model = model.apply(ExperimentalAutoencoder.init_weights)
+            model.to(model.device)
+        elif model_name == "variational_autoencoder":
+            model = VariationalAutoEncoder(config)
+            model = model.apply(VariationalAutoEncoder.init_weights)
+            model.to(model.device)
         else:
-            sys.exit("ae model path does not exist")
+            sys.exit("no valid model name provided")
+        model.load_state_dict(torch.load(model_path, map_location = model.device), strict = False)
     else:
-        sys.exit("ae path does not exist")
-
+        sys.exit("ae model path does not exist")
     return model
 
-def load_100k(data_path):
-    t1 = time.time()
-    data = []
-    data_file = open(data_path, 'r')
-
-    debugging_idx = 0
-    print("debugging load (only 100k)")
-
-    while True:
-        line = data_file.readline()
-        line = line[1:-2]
-        if not line:
-            break
-        line = line.replace(" ", "")
-        line = line.split(",")
-        line = [int(x) for x in line]
-        data.append(line)
-        debugging_idx += 1
-        if debugging_idx > 100_000:
-            break
-    data_file.close()
-    t2 = time.time()
-    print("loading data ids took {:.2f} seconds".format(t2-t1))
-    return data
-
-
 def test(config):
-    vocab, revvocab, dset = load_data_and_create_vocab()
-    config.vocab_size = len(revvocab)
-    validation_data = load_100k("bookcorpus_ids.txt")
-    random.seed(10)
-    model = load_ae(config)
+    location = "/data/s4184416/peregrine/saved_aes/epoch_6_model_cnn_autoencoder.pth"
+    #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_cnn_autoencoder.pth"
+    model_path = location
+    model_name = "cnn_autoencoder"
+    #model_name = "variational_autoencoder"
+    #model_path =  location
+    #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_variational_autoencoder.pth"
+    model = load_model(config, model_name, model_path)
     model.eval()
+    loaded_sents = 10_000
+    data = load_data_from_file("corpus_v20k_ids.txt", max_num_of_sents = loaded_sents)
+    vocab, revvocab = load_vocab("vocab_20k.txt")
+    config.vocab_size = len(revvocab)
 
-    one_gram_bleu = 0
-    two_gram_bleu = 0
-    three_gram_bleu = 0
-    four_gram_bleu = 0
+    scorer = rouge_scorer.RougeScorer(['rouge1', "rouge2", "rouge3", 'rouge4'], use_stemmer=True)
+    score_names = ["rouge1", "rouge2", "rouge3", "rouge4", "bleu1", "bleu2", "bleu3", "bleu4", "bert score"]
 
-    number_of_sents = 0
-    print("Testing model on data it has seen...")
-
-    for batch_idx, batch in enumerate(yieldBatch(config.batch_size, validation_data)):
-        original_lens_batch = real_lengths(batch)
-        padded_batch = pad_batch(batch)
-        padded_batch = torch.LongTensor(padded_batch).to(model.device)
-
-        decoded_logits = model(padded_batch, original_lens_batch)
-        m = torch.nn.Softmax(dim = -1)
-        
-        decoded_tokens = torch.argmax(m(decoded_logits), dim = -1)
-        
+    original_lens_batch = real_lengths(data)
+    padded_batch = pad_batch(data)
+    padded_batch = torch.LongTensor(padded_batch).to(model.device)
+    step_size = 1000
+    decoded_list = []
+    for i in range(0, 10_000, step_size):
+        decoded_logits = model(padded_batch[i:i+1000], original_lens_batch[i:i+1000])
+        decoded_tokens = torch.argmax(decoded_logits, dim = -1)
         decoded_tokens = reformat_decoded_batch(decoded_tokens, 0)
-        padded_batch = padded_batch.tolist()
+        decoded_list.extend(decoded_tokens)
+    padded_batch = padded_batch.tolist()
 
-        for decoded, target in zip(decoded_tokens, padded_batch):
-            try:
-                first_zero = target.index(0)
-                decoded = decoded[:first_zero+1]
-                target = target[:first_zero]
-                target = target + [1] # + EOS_ID
-            except:
-                pass
-            dec_sent = [revvocab[x] for x in decoded]
-            target_sent = [revvocab[x] for x in target]
-            
-            one_gram_bleu += sentence_bleu(target_sent, dec_sent,   weights=(1, 0, 0, 0))
-            two_gram_bleu += sentence_bleu(target_sent, dec_sent,   weights=(0, 1, 0, 0))
-            three_gram_bleu += sentence_bleu(target_sent, dec_sent, weights=(0, 0, 1, 0))
-            four_gram_bleu += sentence_bleu(target_sent, dec_sent,  weights=(0, 0, 0, 1))
-            number_of_sents += 1
-            
-            if batch_idx % 1000 == 0:
-                print("dec_sent", dec_sent)
-                print("target_sent", target_sent)
-                ogb = one_gram_bleu / number_of_sents
-                tgb = two_gram_bleu / number_of_sents
-                trgb = three_gram_bleu / number_of_sents
-                fgb = four_gram_bleu / number_of_sents
-                print("1-gram {:.4f}, 2-gram {:.4f}, 3-gram {:.4f}, 4-gram {:.4f}".format(ogb, tgb, trgb, fgb))
-                
-    print("final bleu scores")
-    one_gram_bleu /= number_of_sents
-    two_gram_bleu /= number_of_sents
-    three_gram_bleu /= number_of_sents
-    four_gram_bleu /= number_of_sents
+    scores = [0] * 9
 
-    print("1-gram {:.4f}, 2-gram {:.4f}, 3-gram {:.4f}, 4-gram {:.4f}".format(one_gram_bleu, two_gram_bleu, three_gram_bleu, four_gram_bleu))
+    decoded_sents = []
+    target_sents = []
 
+    for decoded, target in zip(decoded_list, padded_batch):
+        try:
+            first_zero = target.index(0)
+            decoded = decoded[:first_zero]
+            target = target[:first_zero]
+            target = target
+        except:
+            pass
+        dec_sent = [revvocab[x] for x in decoded]
+        target_sent = [revvocab[x] for x in target]
+        dec_sent = " ".join(dec_sent)
+        target_sent = " ".join(target_sent)
+        decoded_sents.append(dec_sent)
+        target_sents.append(target_sent)
+        interim = rouge_and_bleu(dec_sent, target_sent, scorer)
+        for i in range(len(interim)):
+            scores[i] += interim[i]
 
-
-
+    batched_score = 0
+    cnt = 0
+    for i in range(0, 10_000, step_size):
+        dec = decoded_sents[i:i+1000]
+        tar = target_sents[i:i+1000]
+        bs = return_bert_score(dec, tar, device=config.device, batch_size=step_size)
+        bs = round(bs, 4)
+        batched_score += bs
+        cnt +=1
+    scores = [x / loaded_sents for x in scores]
+    scores[-1] = batched_score / cnt
+    for score, name in zip(scores, score_names):
+        print("{}: {}".format(name, score))

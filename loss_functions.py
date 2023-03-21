@@ -75,7 +75,7 @@ def autoencoder_bleu(decoded_logits, padded_batch, revvocab):
         bleu4 += sentence_bleu(target_sent, dec_sent,   weights=(0.25, 0.25, 0.25, 0.25))
         number_of_sents += 1
     bleu4 /= number_of_sents
-    return bleu4
+    return round(bleu4, 4)
         
 
 def validation_set_acc(config, model, val_set, revvocab):
@@ -93,10 +93,12 @@ def validation_set_acc(config, model, val_set, revvocab):
         targets = torch.LongTensor(targets).to(model.device)
         
         with torch.no_grad():
-            decoded_logits = model(padded_batch, original_lens_batch)
+            if model.name == "variational_autoencoder":
+                _, _, decoded_logits = model(padded_batch, original_lens_batch)
+            else:
+                decoded_logits = model(padded_batch, original_lens_batch)
 
             reconstruction_error = reconstruction_loss(weights, targets, decoded_logits)
-
             bleu4 = autoencoder_bleu(decoded_logits, padded_batch, revvocab)
             
         re_list.append(reconstruction_error.item())
