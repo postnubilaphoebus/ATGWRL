@@ -1,5 +1,9 @@
 from datasets import load_dataset
 from nltk.tokenize import WhitespaceTokenizer, TreebankWordTokenizer
+from nltk.translate.bleu_score import SmoothingFunction
+from rouge_score import rouge_scorer
+from bert_score import score as bert_scoring
+from nltk.translate.bleu_score import sentence_bleu
 import os.path
 from tqdm import tqdm
 import sys
@@ -34,16 +38,16 @@ def inverse_sigmoid_schedule(iterations, sigmoid_rate):
     return a
 
 def autoencoder_info(model, config):
-    print("voab size:", config.vocab_size)
+    print("vocab size:", config.vocab_size)
     print("batch_size:", config.ae_batch_size)
     print("latent dimension:", config.latent_dim)
     print("layer normalisation:", config.layer_norm)
     print("word embedding size:", config.word_embedding)
+    print("using pretrained embedding:", config.pretrained_embedding)
     print("dropout probability:", config.dropout_prob)
     print("learning rate:", config.ae_learning_rate)
     print("ae betas:", *config.ae_betas)
     if model.name == "default_autoencoder":
-        print("using pretrained embedding:", config.pretrained_embedding)
         print("bidirectional:", config.bidirectional)
         print("attention:", config.attn_bool)
         if config.attn_bool:
@@ -57,6 +61,32 @@ def autoencoder_info(model, config):
     else:
         pass
 
+def return_bert_score(pred, target, device, batch_size):
+    bs = torch.mean(bert_scoring(pred, target, lang="en", device = device, batch_size=batch_size)[-1]).item()
+    return bs
+
+def rouge_and_bleu(pred, target, rouge_scorer, verbose = False):
+    smoothie = SmoothingFunction().method4
+    rouge_score = rouge_scorer.score(target, pred)
+    r1_fscore = round(rouge_score["rouge1"].fmeasure, 4)
+    r2_fscore= round(rouge_score["rouge2"].fmeasure, 4)
+    r3_fscore= round(rouge_score["rouge3"].fmeasure, 4)
+    r4_fscore = round(rouge_score["rouge4"].fmeasure, 4)
+    bleu1 = round(sentence_bleu(target, pred, smoothing_function=smoothie, weights=(1, 0, 0, 0)), 4)
+    bleu2 = round(sentence_bleu(target, pred, smoothing_function=smoothie, weights=(0, 1, 0, 0)), 4)
+    bleu3 = round(sentence_bleu(target, pred, smoothing_function=smoothie, weights=(0, 0, 1, 0)), 4)
+    bleu4 = round(sentence_bleu(target, pred, smoothing_function=smoothie), 4)
+    if verbose:
+        print("bleu1", bleu1)
+        print("bleu2", bleu2)
+        print("bleu3", bleu3)
+        print("bleu4", bleu4)
+        print("rouge1", r1_fscore)
+        print("rouge2", r2_fscore)
+        print("rouge3", r3_fscore)
+        print("rouge4", r4_fscore)
+    return (r1_fscore, r2_fscore, r3_fscore, r4_fscore, \
+           bleu1, bleu2, bleu3, bleu4)
 
 def matrix_from_pretrained_embedding(vocab, vocab_size, emb_dim, pretrained_embed):
     weights_matrix = np.random.uniform(-0.25, 0.25, (vocab_size, emb_dim))
@@ -86,7 +116,6 @@ def load_ae(model, model_name = 'epoch_5_model.pth'):
         sys.exit("AE path does not exist")
 
     return model
-
 
 def create_bpe_tokenizer(tokenizer_path = "data/tokenizer-toronto.json"):
     tokenizer_path = "data/tokenizer-toronto.json"
@@ -189,7 +218,6 @@ def update(existingAggregate, newValues):
     if isinstance(newValues, (int, float, complex)):
         # Handle single digits.
         newValues = [newValues]
-
     (count, mean, M2) = existingAggregate
     count += len(newValues) 
     # newvalues - oldMean
@@ -279,7 +307,7 @@ def save_model(epoch, model):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    filename = 'epoch_' + str(epoch) + '_model.pth'
+    filename = 'epoch_' + str(epoch) + '_model_' + model.name +  '.pth'
     final_directory = os.path.join(directory, filename)
     torch.save(model.state_dict(), final_directory)
 
@@ -364,7 +392,7 @@ def return_weights(real_lens):
 
     return batch_weights
 
-def load_vocab(vocab_path, max_size = 20_000):
+def load_vocab(vocab_path, max_size = 50_000):
     count = 0
     vocab = {}
     vocab_file = open(vocab_path, 'r')
@@ -392,7 +420,7 @@ def load_names(names_path):
         name_list.append(line)
     return name_list
 
-def load_data_from_file(data_path, max_num_of_sents = None, debug = False, retain_validation = True):
+def load_data_from_file(data_path, max_num_of_sents = None, debug = False, skip_sents = None):
     cwd = os.getcwd()
     data_path = os.path.join(cwd, data_path)
     
@@ -405,11 +433,16 @@ def load_data_from_file(data_path, max_num_of_sents = None, debug = False, retai
     data_file = open(data_path, 'r')
     
     counter = 0
+    skip_counter = 0
 
     while True:
         line = data_file.readline()
         if not line:
             break
+        if skip_sents:
+            skip_counter += 1
+            if skip_counter < skip_sents:
+                continue
         line = line[2:-2]
         line = line.replace(" ", "")
         line = line.split(",")
@@ -537,6 +570,7 @@ def prepare_data(dset, vocab, vocab_path = "vocab.txt", data_ids = "bookcorpus_i
 def yieldBatch(batch_size, data):
     # lazy iterator for batches
     # PARAMS: batch_size, data
+    random.shuffle(data)
     sindex=0
     eindex=batch_size
     while eindex < len(data):
