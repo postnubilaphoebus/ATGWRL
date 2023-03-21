@@ -3,8 +3,11 @@ from loss_functions import reconstruction_loss, validation_set_acc
 import torch
 import random
 import numpy as np
+import sys
+import scipy
 import warnings
 import torchtext
+from sklearn.metrics.pairwise import cosine_similarity
 from utils.helper_functions import yieldBatch, \
                                    load_data_from_file, \
                                    real_lengths, \
@@ -16,6 +19,41 @@ from utils.helper_functions import yieldBatch, \
                                    matrix_from_pretrained_embedding, \
                                    load_vocab, \
                                    autoencoder_info
+
+def bisect_right(a, x, lo=0, hi=None):
+    """Return the index where to insert item x in list a, assuming a is sorted.
+    The return value i is such that all e in a[:i] have e <= x, and all e in
+    a[i:] have e > x.  So if x already appears in the list, a.insert(x) will
+    insert just after the rightmost x already there.
+    Optional args lo (default 0) and hi (default len(a)) bound the
+    slice of a to be searched.
+    """
+    if lo < 0:
+        raise ValueError('lo must be non-negative')
+    if hi is None:
+        hi = len(a)
+    while lo < hi:
+        mid = (lo+hi)//2
+        if x < a[mid]: hi = mid
+        else: lo = mid+1
+    return lo
+
+def sample_word(cumsummed, normalised, original_word):
+    max_for_word = cumsummed[original_word][-1]
+    sampled_val = random.uniform(0, max_for_word)
+    sampled_word = bisect_right(cumsummed[original_word], sampled_val)
+    return sampled_word
+
+def proportional_prob(config, weights_matrix, percentile_cutoff = 10.0):
+    similarities = cosine_similarity(weights_matrix)
+    normalised = np.array([(x+1) / 2 for x in similarities])
+    np.fill_diagonal(normalised, 0)
+    perc = np.percentile(normalised, percentile_cutoff, axis = 0)
+    for row in range(config.vocab_size):
+        for col in range(config.vocab_size):
+            normalised[row, col] = 0 if normalised[row, col] < perc[row] else normalised[row, col]
+    cumsummed = np.cumsum(normalised, axis = 1)
+    return cumsummed, normalised
 
 def config_performance(config, label_smoothing, bleu4, val_loss, model_name):
     with open("ae_results.txt", "a") as f:
@@ -52,7 +90,7 @@ def config_performance_cnn(config, label_smoothing, bleu4, val_loss, model_name)
         f.close()
 
 def train(config, 
-          num_epochs = 5,
+          num_epochs = 7,
           model_name = "cnn_autoencoder",
           data_path = "corpus_v20k_ids.txt",
           vocab_path = "vocab_20k.txt", 
@@ -77,9 +115,10 @@ def train(config,
     config.pretrained_embedding = True
     config.word_embedding = 100
     config.encoder_dim = 100
+    config.ae_batch_size = 128
     if config.pretrained_embedding == True:
-        #assert config.word_embedding == 300, "glove embedding can only have dim 300, change config"
-        glove = torchtext.vocab.GloVe(name='twitter.27B', dim=100) # 42B is uncased
+        assert config.word_embedding == 100, "glove embedding can only have dim 100, change config"
+        glove = torchtext.vocab.GloVe(name='twitter.27B', dim=100) # 27B is uncased
         weights_matrix = matrix_from_pretrained_embedding(list(vocab.keys()), config.vocab_size, config.word_embedding, glove)
     else:
         weights_matrix = None
@@ -123,8 +162,6 @@ def train(config,
     assert config.latent_dim == config.block_dim, "GAN block dimension and latent dimension must be equal"
     iter_counter = 0
     re_list = []
-
-    config.ae_batch_size = 64
 
     autoencoder_info(model, config)
     print("######################################################")
