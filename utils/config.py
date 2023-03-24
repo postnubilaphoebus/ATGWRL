@@ -49,4 +49,5 @@ n_layers = 10
 block_dim = 100
 g_learning_rate = 1e-4
 c_learning_rate = 3e-4
+gan_betas = [0.5, 0.9]
 shared_learning_rate = 1e-4

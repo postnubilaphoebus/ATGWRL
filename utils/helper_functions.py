@@ -22,6 +22,7 @@ from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.trainers import BpeTrainer
 from tokenizers.normalizers import NFD, StripAccents
 from tokenizers import normalizers
+from sklearn.metrics.pairwise import cosine_similarity
 
 PAD_ID = 0
 EOS_ID = 1
@@ -60,6 +61,77 @@ def autoencoder_info(model, config):
         print("out channels:", config.out_channels)
     else:
         pass
+
+def config_performance_cnn(config, label_smoothing, bleu4, val_loss, model_name):
+    with open("ae_cnn_results.txt", "a") as f:
+        f.write("##################################################################################################################################" + "\n")
+        f.write("model name {}, lr {}, drop {}, kernel1 {}, kernel2 {}, out channels {}, label smoothing {}"
+                .format(model_name,
+                        str(config.ae_learning_rate),
+                        str(config.dropout_prob),
+                        str(config.kernel_sizes[0]),
+                        str(config.kernel_sizes[1]),
+                        str(config.out_channels),
+                        str(label_smoothing))) 
+        f.write("\n")
+        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n" + "\n")
+        f.close()
+
+def config_performance(config, label_smoothing, bleu4, val_loss, model_name):
+    with open("ae_results.txt", "a") as f:
+        f.write("##################################################################################################################################" + "\n")
+        f.write("model name: {}, lr: {}, attn: {}, drop: {}, layer_norm: {}, lbl_smooth: {}, enc_dim: {}"
+                .format(model_name,
+                        str(config.ae_learning_rate), 
+                        str(config.attn_bool), 
+                        str(config.dropout_prob), 
+                        str(config.layer_norm),
+                        str(label_smoothing), 
+                        str(config.encoder_dim)))
+        f.write("\n")
+        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n" + "\n")
+        f.close()
+
+
+def bisect_right(a, x, lo=0, hi=None):
+    """Return the index where to insert item x in list a, assuming a is sorted.
+    The return value i is such that all e in a[:i] have e <= x, and all e in
+    a[i:] have e > x.  So if x already appears in the list, a.insert(x) will
+    insert just after the rightmost x already there.
+    Optional args lo (default 0) and hi (default len(a)) bound the
+    slice of a to be searched.
+    """
+    if lo < 0:
+        raise ValueError('lo must be non-negative')
+    if hi is None:
+        hi = len(a)
+    while lo < hi:
+        mid = (lo+hi)//2
+        if x < a[mid]: hi = mid
+        else: lo = mid+1
+    return lo
+
+def sample_word(cumsummed, normalised, original_word):
+    max_for_word = cumsummed[original_word][-1]
+    sampled_val = random.uniform(0, max_for_word)
+    sampled_word = bisect_right(cumsummed[original_word], sampled_val)
+    return sampled_word
+
+def proportional_prob(config, weights_matrix, percentile_cutoff = 10.0):
+    similarities = cosine_similarity(weights_matrix)
+    normalised = np.array([(x+1) / 2 for x in similarities])
+    np.fill_diagonal(normalised, 0)
+    perc = np.percentile(normalised, percentile_cutoff, axis = 0)
+    for row in range(config.vocab_size):
+        for col in range(config.vocab_size):
+            normalised[row, col] = 0 if normalised[row, col] < perc[row] else normalised[row, col]
+    cumsummed = np.cumsum(normalised, axis = 1)
+    return cumsummed, normalised
+
 
 def return_bert_score(pred, target, device, batch_size):
     bs = torch.mean(bert_scoring(pred, target, lang="en", device = device, batch_size=batch_size)[-1]).item()
@@ -392,7 +464,7 @@ def return_weights(real_lens):
 
     return batch_weights
 
-def load_vocab(vocab_path, max_size = 50_000):
+def load_vocab(vocab_path, max_size = 40_000):
     count = 0
     vocab = {}
     vocab_file = open(vocab_path, 'r')
@@ -403,7 +475,7 @@ def load_vocab(vocab_path, max_size = 50_000):
             break
         vocab[line] = count
         count += 1
-        if count > max_size:
+        if count >= max_size:
             break
     revvocab = {v: k for k, v in vocab.items()}
     return vocab, revvocab
