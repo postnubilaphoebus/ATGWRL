@@ -47,18 +47,20 @@ def load_model(config, model_name, model_path, weights_matrix = None):
     return model
 
 def test(config):
-    location = "/data/s4184416/peregrine/saved_aes/epoch_6_model_cnn_autoencoder.pth"
-    #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_cnn_autoencoder.pth"
+    location = "/data/s4184416/peregrine/saved_aes/epoch_4_model_cnn_autoencoder.pth"
+    #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_4_model_cnn_autoencoder.pth"
     model_path = location
     model_name = "cnn_autoencoder"
+    config.word_embedding = 100
+    config.encoder_dim = 100
     #model_name = "variational_autoencoder"
     #model_path =  location
     #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_variational_autoencoder.pth"
     model = load_model(config, model_name, model_path)
     model.eval()
     loaded_sents = 10_000
-    data = load_data_from_file("corpus_v20k_ids.txt", max_num_of_sents = loaded_sents)
-    vocab, revvocab = load_vocab("vocab_20k.txt")
+    data = load_data_from_file("corpus_v40k_ids.txt", max_num_of_sents = loaded_sents)
+    vocab, revvocab = load_vocab("vocab_40k.txt", 40_000)
     config.vocab_size = len(revvocab)
 
     scorer = rouge_scorer.RougeScorer(['rouge1', "rouge2", "rouge3", 'rouge4'], use_stemmer=True)

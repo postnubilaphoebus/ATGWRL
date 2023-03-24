@@ -7,7 +7,6 @@ import sys
 import scipy
 import warnings
 import torchtext
-from sklearn.metrics.pairwise import cosine_similarity
 from utils.helper_functions import yieldBatch, \
                                    load_data_from_file, \
                                    real_lengths, \
@@ -15,86 +14,16 @@ from utils.helper_functions import yieldBatch, \
                                    return_weights, \
                                    save_model, \
                                    pad_batch_and_add_EOS, \
-                                   my_plot, \
                                    matrix_from_pretrained_embedding, \
                                    load_vocab, \
                                    autoencoder_info
 
-def bisect_right(a, x, lo=0, hi=None):
-    """Return the index where to insert item x in list a, assuming a is sorted.
-    The return value i is such that all e in a[:i] have e <= x, and all e in
-    a[i:] have e > x.  So if x already appears in the list, a.insert(x) will
-    insert just after the rightmost x already there.
-    Optional args lo (default 0) and hi (default len(a)) bound the
-    slice of a to be searched.
-    """
-    if lo < 0:
-        raise ValueError('lo must be non-negative')
-    if hi is None:
-        hi = len(a)
-    while lo < hi:
-        mid = (lo+hi)//2
-        if x < a[mid]: hi = mid
-        else: lo = mid+1
-    return lo
-
-def sample_word(cumsummed, normalised, original_word):
-    max_for_word = cumsummed[original_word][-1]
-    sampled_val = random.uniform(0, max_for_word)
-    sampled_word = bisect_right(cumsummed[original_word], sampled_val)
-    return sampled_word
-
-def proportional_prob(config, weights_matrix, percentile_cutoff = 10.0):
-    similarities = cosine_similarity(weights_matrix)
-    normalised = np.array([(x+1) / 2 for x in similarities])
-    np.fill_diagonal(normalised, 0)
-    perc = np.percentile(normalised, percentile_cutoff, axis = 0)
-    for row in range(config.vocab_size):
-        for col in range(config.vocab_size):
-            normalised[row, col] = 0 if normalised[row, col] < perc[row] else normalised[row, col]
-    cumsummed = np.cumsum(normalised, axis = 1)
-    return cumsummed, normalised
-
-def config_performance(config, label_smoothing, bleu4, val_loss, model_name):
-    with open("ae_results.txt", "a") as f:
-        f.write("##################################################################################################################################" + "\n")
-        f.write("model name: {}, lr: {}, attn: {}, drop: {}, layer_norm: {}, lbl_smooth: {}, enc_dim: {}"
-                .format(model_name,
-                        str(config.ae_learning_rate), 
-                        str(config.attn_bool), 
-                        str(config.dropout_prob), 
-                        str(config.layer_norm),
-                        str(label_smoothing), 
-                        str(config.encoder_dim)))
-        f.write("\n")
-        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
-        f.write("\n")
-        f.write("##################################################################################################################################" + "\n" + "\n")
-        f.close()
-
-def config_performance_cnn(config, label_smoothing, bleu4, val_loss, model_name):
-    with open("ae_cnn_results.txt", "a") as f:
-        f.write("##################################################################################################################################" + "\n")
-        f.write("model name {}, lr {}, drop {}, kernel1 {}, kernel2 {}, out channels {}, label smoothing {}"
-                .format(model_name,
-                        str(config.ae_learning_rate),
-                        str(config.dropout_prob),
-                        str(config.kernel_sizes[0]),
-                        str(config.kernel_sizes[1]),
-                        str(config.out_channels),
-                        str(label_smoothing))) 
-        f.write("\n")
-        f.write("Bleu4: {}, Validation loss: {}".format(bleu4, val_loss))
-        f.write("\n")
-        f.write("##################################################################################################################################" + "\n" + "\n")
-        f.close()
-
 def train(config, 
-          num_epochs = 7,
+          num_epochs = 5,
           model_name = "cnn_autoencoder",
-          data_path = "corpus_v20k_ids.txt",
-          vocab_path = "vocab_20k.txt", 
-          logging_interval = 5, 
+          data_path = "corpus_v40k_ids.txt",
+          vocab_path = "vocab_40k.txt", 
+          logging_interval = 100, 
           saving_interval = 10_000,
           plotting_interval = 10_000,
           validation_size = 10_000,
@@ -105,11 +34,11 @@ def train(config,
     np.random.seed(random_seed)
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path, 110_000)
+    data = load_data_from_file(data_path)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
-    vocab, revvocab = load_vocab(vocab_path)
+    vocab, revvocab = load_vocab(vocab_path, 40_000)
     config.vocab_size = len(revvocab)
 
     config.pretrained_embedding = True
@@ -169,17 +98,13 @@ def train(config,
 
     for epoch_idx in range(num_epochs):
         for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
-            #kl_weight = 1 if iter_counter > kl_annealing_iters else iter_counter / kl_annealing_iters 
-            iter_counter += 1
             
-            #teacher_force_prob = inverse_sigmoid_schedule(iter_counter, sigmoid_rate)
-            teacher_force_prob = 1.0
-
+            iter_counter += 1
+            teacher_force_prob = 0
             original_lens_batch = real_lengths(batch)
             padded_batch = pad_batch(batch)
             targets = pad_batch_and_add_EOS(batch)
             weights = return_weights(original_lens_batch)
-
             weights = torch.FloatTensor(weights).to(model.device)
             padded_batch = torch.LongTensor(padded_batch).to(model.device)
             targets = torch.LongTensor(targets).to(model.device)
@@ -187,11 +112,8 @@ def train(config,
             with torch.cuda.amp.autocast():
 
                 decoded_logits = model(padded_batch, original_lens_batch, teacher_force_prob)
-
                 reconstruction_error = reconstruction_loss(weights, targets, decoded_logits)
-                
                 loss = reconstruction_error 
-                
                 re_list.append(reconstruction_error.item())
 
             scaler.scale(loss).backward()
@@ -215,12 +137,4 @@ def train(config,
         if validation_size >= config.ae_batch_size:
             _, _ = validation_set_acc(config, model, val, revvocab)
                     
-    #print("Training complete, saving model")
-    #save_model(epoch_idx+1, model)
-    #my_plot(len(re_list), re_list)
-    #if validation_size >= config.ae_batch_size:
-        #val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
-    #config_performance_cnn(config, label_smoothing, bleu_score, val_error, model_name)
-    #config_performance(config, label_smoothing, bleu_score, val_error, model_name)
-
     return log_dict

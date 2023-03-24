@@ -32,9 +32,9 @@ def kl_loss(weights, z_mean_list, z_log_var_list):
 
 def train(config, 
           num_epochs = 5,
-          data_path = "corpus_v20k_ids.txt",
-          vocab_path = "vocab_20k.txt", 
-          logging_interval = 5, 
+          data_path = "corpus_v40k_ids.txt",
+          vocab_path = "vocab_40k.txt", 
+          logging_interval = 100, 
           saving_interval = 10_000,
           plotting_interval = 10_000,
           validation_size = 10_000,
@@ -45,14 +45,26 @@ def train(config,
     np.random.seed(random_seed)
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path, 10_000_000)
+    data = load_data_from_file(data_path, 110_000)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
-    vocab, revvocab = load_vocab(vocab_path)
+    vocab, revvocab = load_vocab(vocab_path, 40_000)
     config.vocab_size = len(revvocab)
 
-    model = VariationalAutoEncoder(config)
+    config.pretrained_embedding = True
+    config.word_embedding = 100
+    config.encoder_dim = 600
+    config.ae_batch_size = 128
+
+    if config.pretrained_embedding == True:
+        assert config.word_embedding == 100, "glove embedding can only have dim 100, change config"
+        glove = torchtext.vocab.GloVe(name='twitter.27B', dim=100) # 27B is uncased
+        weights_matrix = matrix_from_pretrained_embedding(list(vocab.keys()), config.vocab_size, config.word_embedding, glove)
+    else:
+        weights_matrix = None
+
+    model = VariationalAutoEncoder(config, weights_matrix)
     model = model.apply(VariationalAutoEncoder.init_weights)
     model = model.to(model.device)
 
@@ -79,7 +91,6 @@ def train(config,
     re_list = []
     kl_list = []
 
-    config.ae_batch_size = 50
     print("######################################################")
     print("######################################################")
 
@@ -115,7 +126,7 @@ def train(config,
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1, error_if_nonfinite=False)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.01, error_if_nonfinite=False)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
@@ -128,14 +139,14 @@ def train(config,
                 progress = ((batch_idx+1) * config.ae_batch_size / data_len / num_epochs) + (epoch_idx / num_epochs)
                 progress = progress * 100
                 print('Progress {:.4f}% | Epoch {} | Batch {} | Loss {:.10f} | Reconstruction Error {:.10f} | current lr: {:.6f} | kl divergence {:.4f}'\
-                    .format(progress,epoch_idx, batch_idx+1, loss.item(), reconstruction_error.item(), optimizer.param_groups[0]['lr'], kl_div.item()))
+                      .format(progress,epoch_idx, batch_idx+1, loss.item(), reconstruction_error.item(), optimizer.param_groups[0]['lr'], kl_div.item()))
+                
+        save_model(epoch_idx+1, model)
+        #my_plot(len(re_list), re_list)
+        if validation_size >= config.ae_batch_size:
+            val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
                     
     #print("Training complete, saving model")
-    epoch_idx = num_epochs
-    save_model(epoch_idx, model)
-    #my_plot(len(re_list), re_list)
-    if validation_size >= config.ae_batch_size:
-        val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
     #config_performance_cnn(config, label_smoothing, bleu_score, val_error, model_name)
     #config_performance(config, label_smoothing, bleu_score, val_error, model_name)
 

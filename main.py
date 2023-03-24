@@ -1,13 +1,13 @@
 import torch
 import utils.config as config
-from train_ae import train
+from train_ae import train as train_ae
 from train_gan import train_gan
 from test_ae import test
-#from train_vae import train
+from train_vae import train as train_vae
 
 def main(*args, **kwargs):
 
-    #log_dict = train(config)
+    #log_dict = train_ae(config)
     train_gan(config)
     #test(config)
 

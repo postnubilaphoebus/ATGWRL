@@ -2,8 +2,8 @@ import torch
 import numpy as np
 import os
 import sys
-from ae import AutoEncoder
-from gan import Generator
+from models import AutoEncoder
+from models import Generator
 from utils.helper_functions import load_vocab
 
 def load_ae(config):

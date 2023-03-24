@@ -8,6 +8,7 @@ import os
 import copy
 import sys
 from models import AutoEncoder, CNNAutoEncoder, Generator, Critic
+from distribution_fitting import distribution_fitting, distribution_constraint
 import random
 import matplotlib.pyplot as plt
 import time
@@ -37,7 +38,7 @@ def save_gan(epoch, generator, critic):
     torch.save(generator.state_dict(), generator_directory)
     torch.save(critic.state_dict(), critic_directory)
 
-def cutoff_scores(score, cutoff_val = 20):
+def cutoff_scores(score, cutoff_val = 5):
     if score > cutoff_val:
         return cutoff_val
     elif score < -cutoff_val:
@@ -56,6 +57,11 @@ def sample_multivariate_gaussian(config):
     noise = torch.from_numpy(np.random.default_rng().multivariate_normal(mean, cov, (config.gan_batch_size))).float()
     noise = noise.to(config.device)
     return noise
+
+def sample_bernoulli(config):
+    probs = torch.rand(size=(config.gan_batch_size, config.latent_dim))
+    bernoulli = torch.bernoulli(probs).to(config.device)
+    return bernoulli
     
 def plot_grad_flow(named_parameters):
     '''Plots the gradients flowing through different layers in the net during training.
@@ -327,12 +333,12 @@ def singular_values(gen, crit):
 
     return (c00, c01, c10, c11, g00, g01, g10, g11)
 
-def is_pos_def(x):
-    return np.all(np.linalg.eigvals(x) > 0)
-
 def train_gan(config, 
+              num_sents = 110_000,
               validation_size = 10_000,
               unroll_steps = 0,
+              gdf = False,
+              gdf_scaling_factor = 0.001,
               num_epochs = 30,
               gp_lambda = 10,
               print_interval = 100,
@@ -342,20 +348,22 @@ def train_gan(config,
               vocab_path = "vocab_20k.txt"):
                   
     config.vocab_size = 20_000
-    #print("plotting_interval", plotting_interval)
     config.encoder_dim = 600
     config.word_embedding = 300
     print("num_epochs", num_epochs)
     autoencoder = load_ae(config)
     autoencoder.eval()
-    data = load_data_from_file(data_path, 110_000)
+
+    data = load_data_from_file(data_path, num_sents)
     val, all_data = data[:validation_size], data[validation_size:]
-    #all_data = data
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
 
-    config.gan_batch_size = 128
-    config.n_layers = 10
+    if gdf == True:
+        fitted_distribution = distribution_fitting(config, autoencoder, all_data)
+
+    config.gan_batch_size = 256
+    config.n_layers = 20
 
     print("batch size {}, n_layers {}, block_dim {}".format(config.gan_batch_size, config.n_layers, config.block_dim))
     print("n_times_critic", n_times_critic)
@@ -370,7 +378,7 @@ def train_gan(config,
     #crit = load_crit(config)
 
     config.g_learning_rate = 1e-4
-    config.c_learning_rate = 1e-4
+    config.c_learning_rate = 3e-4
 
     print("unroll steps", unroll_steps)
     print("G lr", config.g_learning_rate)
@@ -382,16 +390,14 @@ def train_gan(config,
     gen.train()
     crit.train()
 
-    # use binomial noise
-
     gen_optim = torch.optim.Adam(lr = config.g_learning_rate, 
                                  params = gen.parameters(),
-                                 betas = (0.5, 0.9),
+                                 betas = (config.gan_betas[0], config.gan_betas[1]),
                                  eps=1e-08)
     
     crit_optim = torch.optim.Adam(lr = config.c_learning_rate, 
                                   params = crit.parameters(),
-                                  betas = (0.5, 0.9),
+                                  betas = (config.gan_betas[0], config.gan_betas[1]),
                                   eps=1e-08) 
     
     c_loss_interval = []
@@ -424,7 +430,7 @@ def train_gan(config,
             with torch.no_grad():
                 z_real, _ = autoencoder.encoder(padded_batch)
             t2 = time.time()
-            noise = sample_multivariate_gaussian(config)
+            noise = sample_bernoulli(config)
             z_fake = gen(noise)
             real_score = crit(z_real)
             fake_score = crit(z_fake)
@@ -447,7 +453,7 @@ def train_gan(config,
                         with torch.no_grad():
                             z_real, _  = autoencoder.encoder(padded_batch, original_lens_batch)
                         real_score = crit(z_real)
-                        noise = sample_multivariate_gaussian(config)
+                        noise = sample_bernoulli(config)
                         with torch.no_grad():
                             z_fake = gen(noise)
                         fake_score = crit(z_fake)
@@ -455,11 +461,16 @@ def train_gan(config,
                         c_loss = - torch.mean(real_score) + torch.mean(fake_score) + gp_lambda * grad_penalty
                         c_loss.backward()
                         crit_optim.step()
-                    noise = torch.from_numpy(np.random.normal(0, 1, (config.gan_batch_size, config.latent_dim))).float()
-                    noise = noise.to(config.device)
+                    noise = sample_bernoulli(config)
                     gen_optim.zero_grad()
                     fake_score = crit(gen(noise))
-                    g_loss = - torch.mean(fake_score)
+                    if gdf == True:
+                        gdf_loss = distribution_constraint(fitted_distribution, gen(noise), gdf_scaling_factor)
+                        g_loss = - torch.mean(fake_score) + gdf_loss
+                        if agnostic_idx % print_interval == 0:
+                            print("gdf_loss", gdf_loss.item())
+                    else:
+                        g_loss = - torch.mean(fake_score)
                     g_loss.backward()
                     gen_optim.step()
                     g_loss_interval.append(g_loss.item())
@@ -468,7 +479,13 @@ def train_gan(config,
                 else:
                     gen_optim.zero_grad()
                     fake_score = crit(gen(noise))
-                    g_loss = - torch.mean(fake_score)
+                    if gdf == True:
+                        gdf_loss = distribution_constraint(fitted_distribution, gen(noise), gdf_scaling_factor)
+                        g_loss = - torch.mean(fake_score) + gdf_loss
+                        if agnostic_idx % print_interval == 0:
+                            print("gdf_loss", gdf_loss.item())
+                    else:
+                        g_loss = - torch.mean(fake_score)
                     g_loss.backward()
                     gen_optim.step()
                     g_loss_interval.append(g_loss.item())
@@ -512,15 +529,12 @@ def train_gan(config,
             total_time += t3 - t0
             autoencoder_time += t2 - t1
 
-        #print("Checkpoint, saving generator and critic")
-        #save_gan(epoch_idx+1, gen, crit)
-
     print("autoencoder as fraction of time", autoencoder_time / total_time)
     print("saving GAN...")
     save_gan(epoch_idx+1, gen, crit)
-    write_accs_to_file(acc_real_batch, acc_fake_batch, c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, 0.5, config.g_learning_rate)
-    plot_gan_acc(acc_real_batch, acc_fake_batch, config.gan_batch_size, 0.5, config.g_learning_rate)
-    plot_gan_loss(c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, 0.5, config.g_learning_rate)
+    write_accs_to_file(acc_real_batch, acc_fake_batch, c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
+    plot_gan_acc(acc_real_batch, acc_fake_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
+    plot_gan_loss(c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
     plot_singular_values((crit_sing0_first_layer, 
                           crit_sing1_first_layer, 
                           crit_sing0_last_layer, 

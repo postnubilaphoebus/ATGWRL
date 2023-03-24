@@ -46,43 +46,22 @@ class DefaultDecoder(nn.Module):
         self.embedding_dimension = config.word_embedding
         self.fc = torch.nn.Linear(self.latent_dim, self.decoder_dim)
         self.layer_normalisation = torch.nn.LayerNorm(self.decoder_dim)
-        self.fast_decoder = torch.nn.GRUCell(self.decoder_dim, self.decoder_dim)
+        self.decoder_rnn = torch.nn.GRU(self.decoder_dim, self.decoder_dim, batch_first=True)
 
     def forward(self, z, true_inp, tf_prob):
-        # to decoder dim
+        # [B, L] -> [B, H]
         output = self.fc(z)
+
+        # [B, H] -> [B, S, H]
+        output, _ = self.decoder_rnn(output.unsqueeze(1).repeat(1, MAX_SENT_LEN, 1), output.unsqueeze(0))
 
         if self.layer_norm == True:
             output = self.layer_normalisation(output)
 
-        single_output = output
+        # [B, S, H] -> [S, B, H]
+        output = torch.transpose(output, 1, 0)
         
-        output = output.unsqueeze(0)
-        
-        # [B, H] -> [B, S, H]
-        encoded = output.repeat(MAX_SENT_LEN, 1, 1)
-        repeating = int(self.decoder_dim / self.embedding_dimension)
-        
-        true_inp = true_inp.repeat(1, 1, repeating)
-        true_inp = torch.transpose(true_inp, 1, 0)
-        
-        hx = single_output
-        outs = []
-        
-        for i, inp in enumerate(encoded):
-            rand_float = np.random.rand()
-            if rand_float < tf_prob:
-                # teacher forcing
-                hx = self.fast_decoder(inp, true_inp[i])
-            else:
-                # no teacher forcing
-                hx = self.fast_decoder(inp, hx)
-                
-            outs.append(hx)
-            
-        out = torch.stack((outs))
-        
-        return out
+        return output
     
 class ExperimentalDecoder(nn.Module):
     def __init__(self, config):
@@ -163,6 +142,8 @@ class CNN_Encoder(nn.Module):
                                              kernel_size = self.kernel_sizes[1], groups = 1)
         self.l_out_a = (MAX_SENT_LEN - (self.kernel_sizes[0] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
         self.l_out_b = (MAX_SENT_LEN - (self.kernel_sizes[1] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
+        self.batch_norm_a = torch.nn.BatchNorm1d(self.out_channels)
+        self.batch_norm_b = torch.nn.BatchNorm1d(self.out_channels)
         self.max_pool = nn.MaxPool1d(kernel_size = self.max_pool_kernel, stride = self.max_pool_kernel)
         self.to_latent = torch.nn.Linear(round((self.l_out_a + self.l_out_b) * self.out_channels), self.latent_dim)
         self.second_dropout = nn.Dropout(p = self.dropout_prob, inplace=False)
@@ -173,9 +154,11 @@ class CNN_Encoder(nn.Module):
         embedded_t = torch.transpose(embedded, 2, 1)
         c_1_a = self.first_convolution_a(embedded_t)
         c_1_a = self.max_pool(c_1_a)
+        c_1_a = self.batch_norm_a(c_1_a)
         c_1_a = torch.flatten(c_1_a, start_dim = 1)
         c_1_b = self.first_convolution_b(embedded_t)
         c_1_b = self.max_pool(c_1_b)
+        c_1_b = self.batch_norm_b(c_1_b)
         c_1_b = torch.flatten(c_1_b, start_dim = 1)
         c_1_a = torch.transpose(c_1_a, 1, 0)
         c_1_b = torch.transpose(c_1_b, 1, 0)
@@ -200,10 +183,10 @@ class DefaultEncoder(nn.Module):
         self.hidden_dim = config.encoder_dim
         self.embedding_layer = nn.Embedding(config.vocab_size, self.embedding_dimension) if weights_matrix == None \
                                else create_emb_layer(weights_matrix, non_trainable=True)
-        self.layer_normalisation = torch.nn.LayerNorm(self.embedding_dimension)
         self.bidirectional = config.bidirectional
         self.attn_multiplier = 2 if self.bidirectional else 1
         self.encoder_rnn = torch.nn.GRU(self.embedding_dimension, self.encoder_dim, batch_first=True, bidirectional = self.bidirectional)
+        self.layer_normalisation = torch.nn.LayerNorm(self.encoder_dim * self.attn_multiplier)
         self.attn_softmax = nn.Softmax(dim = -1)
         self.attn_bool = config.attn_bool
         self.attn_heads = config.num_attn_heads
@@ -252,9 +235,6 @@ class DefaultEncoder(nn.Module):
         # [B, S] -> [B, S, E]
         embedded = self.embedding_layer(x)
 
-        if self.layer_norm == True:
-            embedded = self.layer_normalisation(embedded)
-
         # packing for efficiency and masking
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, x_lens, batch_first=True, enforce_sorted = False)
         # [B, S, E] -> [B, S, H]
@@ -262,6 +242,9 @@ class DefaultEncoder(nn.Module):
 
         # unpack to extract last non-padded element
         output, _ = torch.nn.utils.rnn.pad_packed_sequence(output, batch_first=True, total_length = MAX_SENT_LEN)
+
+        if self.layer_norm == True:
+            output = self.layer_normalisation(output)
 
         if self.attn_bool:
             mask = self.mask_padding(x_lens, output.size(-1))
@@ -381,7 +364,7 @@ class ExperimentalAutoencoder(nn.Module):
         return logits
     
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, weights_matrix):
         super().__init__()
         self.name = "variational_autoencoder"
         self.device = config.device
@@ -392,15 +375,24 @@ class VariationalAutoEncoder(nn.Module):
         self.bidirectional = config.bidirectional
         self.embedding_dimension = config.word_embedding
         self.dropout = config.dropout_prob
+        self.num_layers = 2
         self.layer_multiplier = 2 if self.bidirectional else 1
-        self.embedding_layer = nn.Embedding(self.vocab_size, self.embedding_dimension)
-        self.encoder_rnn = torch.nn.GRU(self.embedding_dimension, self.encoder_dim, batch_first=True, bidirectional = self.bidirectional)
+        self.embedding_layer = nn.Embedding(self.vocab_size, self.embedding_dimension) if weights_matrix == None \
+                               else create_emb_layer(weights_matrix, non_trainable=True)
+        self.encoder_rnn = torch.nn.GRU(self.embedding_dimension, 
+                                        self.encoder_dim, 
+                                        num_layers = self.num_layers,
+                                        batch_first=True, 
+                                        bidirectional = self.bidirectional)
         self.to_latent = torch.nn.Linear(self.encoder_dim * self.layer_multiplier, self.latent_dim)
         self.z_mean = torch.nn.Linear(self.latent_dim, self.latent_dim)
         self.z_log_var = torch.nn.Linear(self.latent_dim, self.latent_dim)
         self.dropout_layer = torch.nn.Dropout(self.dropout)
         self.to_decoder = torch.nn.Linear(self.latent_dim, self.decoder_dim)
-        self.decoder_rnn = torch.nn.GRU(self.decoder_dim, self.decoder_dim, batch_first=True)
+        self.decoder_rnn = torch.nn.GRU(self.decoder_dim, 
+                                        self.decoder_dim, 
+                                        num_layers = self.num_layers,
+                                        batch_first=True)
         self.hidden_to_vocab = torch.nn.Linear(self.decoder_dim, self.vocab_size)
 
     def init_weights(self):
@@ -444,7 +436,7 @@ class VariationalAutoEncoder(nn.Module):
     
     def decoder(self, z):
         z = self.to_decoder(z)
-        out, _ = self.decoder_rnn(z.unsqueeze(1).repeat(1,MAX_SENT_LEN,1), z.unsqueeze(0))
+        out, _ = self.decoder_rnn(z.unsqueeze(1).repeat(1,MAX_SENT_LEN,1), z.unsqueeze(0).repeat(self.num_layers, 1, 1))
         logits = self.hidden_to_vocab(out)
         return logits
     
@@ -493,14 +485,12 @@ class Block(nn.Module):
         if activation_function == "relu":
             self.net = nn.Sequential(
                 nn.Linear(block_dim, block_dim),
-                nn.LayerNorm(block_dim),
                 nn.ReLU(True),
                 nn.Linear(block_dim, block_dim),
             )
         elif activation_function == "leaky_relu":
             self.net = nn.Sequential(
                 nn.Linear(block_dim, block_dim),
-                nn.LayerNorm(block_dim),
                 nn.LeakyReLU(negative_slope = slope, inplace=True),
                 nn.Linear(block_dim, block_dim),
                 )
@@ -511,6 +501,60 @@ class Block(nn.Module):
     
     def forward(self, x):
         return self.net(x) + x
+    
+class LongerBlock(nn.Module):
+    
+    def __init__(self, block_dim, activation_function = "relu", slope = 0.1):
+        super().__init__()
+        if activation_function == "relu":
+            self.net = nn.Sequential(
+                nn.Linear(block_dim, block_dim),
+                nn.ReLU(True),
+                nn.Linear(block_dim, block_dim),
+                nn.ReLU(True),
+                nn.Linear(block_dim, block_dim),
+            )
+        elif activation_function == "leaky_relu":
+            self.net = nn.Sequential(
+                nn.Linear(block_dim, block_dim),
+                nn.LeakyReLU(negative_slope = slope, inplace=True),
+                nn.Linear(block_dim, block_dim),
+                nn.LeakyReLU(negative_slope = slope, inplace=True),
+                nn.Linear(block_dim, block_dim),
+                )
+        else:
+            sys.exit("Please provide valid activation function.\
+                      Choose among 'relu' and 'leaky_relu'. \
+                     'leaky_relu' slope defaults to 0.1")
+    
+    def forward(self, x):
+        return self.net(x) + x
+    
+class RecursiveLayerNormBlock(nn.Module):
+    
+    def __init__(self, block_dim, activation_function = "relu", slope = 0.1):
+        super().__init__()
+        if activation_function == "relu":
+            self.net = nn.Sequential(
+                nn.Linear(block_dim, block_dim),
+                nn.ReLU(True),
+                nn.Linear(block_dim, block_dim),
+            )
+        elif activation_function == "leaky_relu":
+            self.net = nn.Sequential(
+                nn.Linear(block_dim, block_dim),
+                nn.LeakyReLU(negative_slope = slope, inplace=True),
+                nn.Linear(block_dim, block_dim),
+                )
+        else:
+            sys.exit("Please provide valid activation function.\
+                      Choose among 'relu' and 'leaky_relu'. \
+                     'leaky_relu' slope defaults to 0.1")
+        self.inner_norm = nn.LayerNorm(block_dim)
+        self.outer_norm = nn.LayerNorm(block_dim)
+    
+    def forward(self, x):
+        return self.outer_norm(x + self.inner_norm(x + self.net(x)))
 
 class Generator(nn.Module):
     
@@ -519,11 +563,14 @@ class Generator(nn.Module):
         self.net = nn.Sequential(
             *[Block(block_dim, activation_function, slope) for _ in range(n_layers)]
         )
+        #self.last_mlp = Block(block_dim, activation_function, slope)
 
     def init_weights(self, activation_function = 'relu'):
         if isinstance(self, nn.Linear):
+            stdv = 1. / math.sqrt(self.weight.size(1))
             torch.nn.init.kaiming_normal_(self.weight, nonlinearity = activation_function)
-            self.bias.data.fill_(0.01)
+            if self.bias is not None:
+                self.bias.data.uniform_(-stdv, stdv)
         else:
             pass
 
@@ -537,11 +584,14 @@ class Critic(nn.Module):
         self.net = nn.Sequential(
             *[Block(block_dim, activation_function, slope) for _ in range(n_layers)]
         )
+        #self.last_mlp = Block(block_dim, activation_function, slope)
 
     def init_weights(self, activation_function = 'relu'):
         if isinstance(self, nn.Linear):
+            stdv = 1. / math.sqrt(self.weight.size(1))
             torch.nn.init.kaiming_normal_(self.weight, nonlinearity = activation_function)
-            self.bias.data.fill_(0.01)
+            if self.bias is not None:
+                self.bias.data.uniform_(-stdv, stdv)
         else:
             pass
         
@@ -554,23 +604,3 @@ class Critic(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-    
-class SyntaxModel(nn.Module):
-    def __init__(self, n_layers, block_dim, classes):
-        super().__init__()
-        self.net = nn.Sequential(
-            *[Block(block_dim) for _ in range(n_layers)]
-        )
-        self.classification_layer = nn.Linear(block_dim, classes)
-
-    def init_weights(self):
-        if isinstance(self, nn.Linear):
-            torch.nn.init.kaiming_normal_(self.weight, nonlinearity='relu')
-            self.bias.data.fill_(0.01)
-        else:
-            pass
-
-    def forward(self, x):
-        out = self.net(x)
-        out = self.classification_layer(out)
-        return out

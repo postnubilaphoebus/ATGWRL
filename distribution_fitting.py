@@ -32,8 +32,9 @@ def load_model(config, model_name, model_path, weights_matrix = None):
         sys.exit("ae model path does not exist")
     return model
 
-def distribution_constraint(fitted_distribution, mini_batch, scaling_factor = 1.0):
-    # [H, B] 
+def distribution_constraint(fitted_distribution, mini_batch, scaling_factor = 0.001):
+    # Applies global distribution fitting by Gong et al. in https://arxiv.org/abs/2212.01521
+    # L(G) = 1/n (||mu_g - mu_r||_1 + ||sig_g - sig_r||_1) (see p. 4)
     batch_mean = torch.mean(mini_batch, dim = 1)
     batch_sigma = torch.std(mini_batch, dim = 1)
     batch_stats = torch.stack((batch_mean, batch_sigma))
@@ -51,28 +52,19 @@ def distribution_constraint(fitted_distribution, mini_batch, scaling_factor = 1.
     return scaling_factor * constraint_loss
 
 def distribution_fitting(config, 
-                         model_name = "cnn_autoencoder", 
-                         model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_cnn_autoencoder.pth", 
-                         data_path = "corpus_v20k_ids.txt",
-                         vocab_path = "vocab_20k.txt",
-                         validation_size = 10_000):
-    config.vocab_size = 20_000
-    config.encoder_dim = 600
-    config.word_embedding = 300
-    model = load_model(config, model_name, model_path)
-    model.eval()
+                         model,
+                         data):
+    # Global distribution fitting
+    # As described by Gong et al. in https://arxiv.org/abs/2212.01521
+    # Returns a tensor of shape [2, config.latent_dim],
+    # where tensor[0] is mu, and tensor[1] is sigma
 
-    print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path, 20_000)
-    val, all_data = data[:validation_size], data[validation_size:]
-    data_len = len(all_data)
-    print("Loaded {} sentences".format(data_len))
+    print("Applying GDF to Autoencoder...")
 
-    config.ae_batch_size = 1000
     initial_aggregate = (0, 0, 0) # mean, variance, samplevariance
     result_batch = [initial_aggregate] * config.latent_dim
 
-    for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
+    for batch_idx, batch in enumerate(yieldBatch(1_000, data)):
         original_lens_batch = real_lengths(batch)
         padded_batch = pad_batch(batch)
         padded_batch = torch.LongTensor(padded_batch).to(model.device)
@@ -92,6 +84,7 @@ def distribution_fitting(config,
             # [B, H] -> [H, B]
             z = torch.transpose(z, 1, 0)
             z = z.cpu().detach().numpy()
+            # update mean, variance, samplevariance online
             for idx, hidden in enumerate(z):
                 result_batch[idx] = update(result_batch[idx], hidden)
 
@@ -99,20 +92,9 @@ def distribution_fitting(config,
     for idx, elem in enumerate(result_batch):
         result_batch[idx] = finalize(elem)
 
-    
     distribution_mean = [x[0] for x in result_batch]
     distribution_variance = [x[1] for x in result_batch]
     distribution_mean = torch.FloatTensor(distribution_mean)
     distribution_variance = torch.FloatTensor(distribution_variance)
     fitted_distribution = torch.stack((distribution_mean, distribution_variance)).to(config.device)
-    z = torch.FloatTensor(z).to(config.device)
-    return fitted_distribution, z
-
-if __name__ == "__main__":
-    fitted_distribution, z = distribution_fitting(config)
-
-    loss = distribution_constraint(fitted_distribution, z)
-    print("loss", loss)
-    
-
-
+    return fitted_distribution
