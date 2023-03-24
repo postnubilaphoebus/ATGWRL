@@ -1,10 +1,9 @@
-from models import AutoEncoder, CNNAutoEncoder, StrongAutoencoder, VariationalAutoEncoder
+from models import AutoEncoder, CNNAutoEncoder, VariationalAutoEncoder
 import os
 import torch
 import sys
 import utils.config as config
-from utils.helper_functions import rouge_and_bleu_and_bert, \
-                                   load_data_from_file, \
+from utils.helper_functions import load_data_from_file, \
                                    yieldBatch, \
                                    real_lengths, \
                                    pad_batch, \
@@ -22,12 +21,8 @@ def load_model(config, model_name, model_path, weights_matrix = None):
             model = CNNAutoEncoder(config, weights_matrix)
             model = model.apply(CNNAutoEncoder.init_weights)
             model.to(model.device)
-        elif model_name == "strong_autoencoder":
-            model = StrongAutoencoder(config, weights_matrix)
-            model = model.apply(StrongAutoencoder.init_weights)
-            model.to(model.device)
         elif model_name == "variational_autoencoder":
-            model = VariationalAutoEncoder(config)
+            model = VariationalAutoEncoder(config, weights_matrix)
             model = model.apply(VariationalAutoEncoder.init_weights)
             model.to(model.device)
         else:
@@ -37,31 +32,38 @@ def load_model(config, model_name, model_path, weights_matrix = None):
         sys.exit("ae model path does not exist")
     return model
 
-def distribution_constraint(fitted_distribution, model_output):
-    generated_data = [(0, 0, 0)] * config.latent_dim
-    for idx, hidden in enumerate(model_output):
-        generated_data[idx] = update(generated_data[idx], hidden)
+def distribution_constraint(fitted_distribution, mini_batch, scaling_factor = 1.0):
+    # [H, B] 
+    batch_mean = torch.mean(mini_batch, dim = 1)
+    batch_sigma = torch.std(mini_batch, dim = 1)
+    batch_stats = torch.stack((batch_mean, batch_sigma))
+    
     cnt = 0
     constraint_sum = 0
-    for real_stats, gen_stats in zip(fitted_distribution, generated_data):
-        mu_diff = gen_stats[0] - real_stats[0]
-        sigma_diff = gen_stats[1] - gen_stats[1]
+    for real_stats, gen_stats in zip(fitted_distribution, batch_stats):
+        mu_diff = torch.abs(gen_stats[0] - real_stats[0])
+        sigma_diff = torch.abs(gen_stats[1] - real_stats[1])
         constraint_sum += (mu_diff + sigma_diff)
         cnt += 1
+        
     constraint_loss = constraint_sum / cnt
-    return constraint_loss
+    constraint_loss /= mini_batch.size(1)
+    return scaling_factor * constraint_loss
 
 def distribution_fitting(config, 
-                         model_name = "variational_autoencoder", 
-                         model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_4_model_variational_autoencoder.pth", 
+                         model_name = "cnn_autoencoder", 
+                         model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_cnn_autoencoder.pth", 
                          data_path = "corpus_v20k_ids.txt",
                          vocab_path = "vocab_20k.txt",
-                         validation_size = 0):
+                         validation_size = 10_000):
+    config.vocab_size = 20_000
+    config.encoder_dim = 600
+    config.word_embedding = 300
     model = load_model(config, model_name, model_path)
     model.eval()
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path, 10_000)
+    data = load_data_from_file(data_path, 20_000)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
@@ -96,11 +98,21 @@ def distribution_fitting(config,
     # finalising mu and sigma
     for idx, elem in enumerate(result_batch):
         result_batch[idx] = finalize(elem)
-    return result_batch
+
+    
+    distribution_mean = [x[0] for x in result_batch]
+    distribution_variance = [x[1] for x in result_batch]
+    distribution_mean = torch.FloatTensor(distribution_mean)
+    distribution_variance = torch.FloatTensor(distribution_variance)
+    fitted_distribution = torch.stack((distribution_mean, distribution_variance)).to(config.device)
+    z = torch.FloatTensor(z).to(config.device)
+    return fitted_distribution, z
 
 if __name__ == "__main__":
-    # TODO: transfer all computations to pytorch
-    fitted_distribution, data = distribution_fitting(config)
-    fitted_distribution = torch.FloatTensor(fitted_distribution).to(config.device)
+    fitted_distribution, z = distribution_fitting(config)
+
+    loss = distribution_constraint(fitted_distribution, z)
+    print("loss", loss)
+    
 
 
