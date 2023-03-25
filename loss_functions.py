@@ -1,12 +1,14 @@
 import torch
 from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.bleu_score import SmoothingFunction
 from utils.helper_functions import average_over_nonpadded, \
                                    yieldBatch, \
                                    pad_batch, \
                                    real_lengths, \
                                    pad_batch_and_add_EOS, \
                                    return_weights, \
-                                   reformat_decoded_batch
+                                   reformat_decoded_batch, \
+                                   rouge_and_bleu
 
 def encoder_loss(model, encoded, re_embedded, x_lens, loss_fn = None):
     # as given by Oshri and Khandwala in: 
@@ -55,6 +57,7 @@ def reconstruction_loss(weights, targets, decoded_logits, loss_fn = None, label_
     return reconstruction_error
 
 def autoencoder_bleu(decoded_logits, padded_batch, revvocab):
+    smoothie = SmoothingFunction().method4
     m = torch.nn.Softmax(dim = -1)
     decoded_tokens = torch.argmax(m(decoded_logits), dim = -1)
     decoded_tokens = reformat_decoded_batch(decoded_tokens, 0)
@@ -72,7 +75,7 @@ def autoencoder_bleu(decoded_logits, padded_batch, revvocab):
         dec_sent = [revvocab[x] for x in decoded]
         target_sent = [revvocab[x] for x in target]
 
-        bleu4 += sentence_bleu(target_sent, dec_sent,   weights=(0.25, 0.25, 0.25, 0.25))
+        bleu4 += sentence_bleu(target_sent, dec_sent, smoothing_function=smoothie, weights=(0.25, 0.25, 0.25, 0.25))
         number_of_sents += 1
     bleu4 /= number_of_sents
     return round(bleu4, 4)

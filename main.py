@@ -7,7 +7,7 @@ from train_vae import train as train_vae
 
 def main(*args, **kwargs):
 
-    #log_dict = train_ae(config)
+    #log_dict = train_vae(config)
     train_gan(config)
     #test(config)
 

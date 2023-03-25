@@ -13,10 +13,8 @@ from utils.helper_functions import yieldBatch, \
                                    save_model, \
                                    pad_batch_and_add_EOS, \
                                    average_over_nonpadded, \
-                                   my_plot, \
                                    matrix_from_pretrained_embedding, \
-                                   load_vocab, \
-                                   autoencoder_info
+                                   load_vocab
 
 def kl_loss(weights, z_mean_list, z_log_var_list):
     weights = torch.transpose(weights, 1, 0)
@@ -45,7 +43,7 @@ def train(config,
     np.random.seed(random_seed)
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path, 110_000)
+    data = load_data_from_file(data_path)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
@@ -96,12 +94,7 @@ def train(config,
 
     for epoch_idx in range(num_epochs):
         for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
-            #kl_weight = 1 if iter_counter > kl_annealing_iters else iter_counter / kl_annealing_iters 
             iter_counter += 1
-            
-            #teacher_force_prob = inverse_sigmoid_schedule(iter_counter, sigmoid_rate)
-            #teacher_force_prob = 0
-
             original_lens_batch = real_lengths(batch)
             padded_batch = pad_batch(batch)
             targets = pad_batch_and_add_EOS(batch)
@@ -142,12 +135,7 @@ def train(config,
                       .format(progress,epoch_idx, batch_idx+1, loss.item(), reconstruction_error.item(), optimizer.param_groups[0]['lr'], kl_div.item()))
                 
         save_model(epoch_idx+1, model)
-        #my_plot(len(re_list), re_list)
         if validation_size >= config.ae_batch_size:
             val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
-                    
-    #print("Training complete, saving model")
-    #config_performance_cnn(config, label_smoothing, bleu_score, val_error, model_name)
-    #config_performance(config, label_smoothing, bleu_score, val_error, model_name)
 
     return log_dict

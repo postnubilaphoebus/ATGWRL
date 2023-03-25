@@ -4,6 +4,7 @@ from nltk.translate.bleu_score import SmoothingFunction
 from rouge_score import rouge_scorer
 from bert_score import score as bert_scoring
 from nltk.translate.bleu_score import sentence_bleu
+from matplotlib.lines import Line2D
 import os.path
 from tqdm import tqdm
 import sys
@@ -115,6 +116,54 @@ def bisect_right(a, x, lo=0, hi=None):
         else: lo = mid+1
     return lo
 
+def plot_grad_flow(named_parameters):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+    
+    Usage: Plug this function in Trainer class after loss.backwards() as 
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'gradient_flow')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    ave_grads = []
+    max_grads= []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n):
+            layers.append(n)
+            ave_grads.append(p.grad.abs().mean().cpu().detach())
+            max_grads.append(p.grad.abs().max().cpu().detach())
+    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    plt.xlim(left=0, right=len(ave_grads))
+    plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.legend([Line2D([0], [0], color="c", lw=4),
+                Line2D([0], [0], color="b", lw=4),
+                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    final_directory = os.path.join(directory, "gradient_flow_end")
+    plt.savefig(final_directory, dpi=300)
+    plt.close()
+
+def save_gan(epoch, autoencoder_name, generator, critic):
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'saved_gan')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    critic_filename = 'critic_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
+    generator_filename = 'generator_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
+    critic_directory = os.path.join(directory, critic_filename)
+    generator_directory = os.path.join(directory, generator_filename)
+    torch.save(generator.state_dict(), generator_directory)
+    torch.save(critic.state_dict(), critic_directory)
+
 def sample_word(cumsummed, normalised, original_word):
     max_for_word = cumsummed[original_word][-1]
     sampled_val = random.uniform(0, max_for_word)
@@ -132,6 +181,227 @@ def proportional_prob(config, weights_matrix, percentile_cutoff = 10.0):
     cumsummed = np.cumsum(normalised, axis = 1)
     return cumsummed, normalised
 
+def cutoff_scores(score, cutoff_val = 5):
+    if score > cutoff_val:
+        return cutoff_val
+    elif score < -cutoff_val:
+        return - cutoff_val
+    else:
+        return score
+    
+def find_min_and_max(config,
+                      model,
+                      data):
+    # find min and max of data to normalise data
+    # between 0 and 1
+    print("finding minimum and maximum in data...")
+
+    maximum = torch.full((config.latent_dim,), -1_000_000.0, dtype=torch.float64)
+    minimum = torch.full((config.latent_dim,), 1_000_000.0, dtype=torch.float64)
+
+    for batch_idx, batch in enumerate(yieldBatch(1_000, data)):
+        original_lens_batch = real_lengths(batch)
+        padded_batch = pad_batch(batch)
+        padded_batch = torch.LongTensor(padded_batch).to(model.device)
+        with torch.no_grad():
+            if model.name == "variational_autoencoder":
+                output = model.encoder(padded_batch, original_lens_batch)
+                # extract last hidden state
+                context = []
+                for sequence, unpadded_len in zip(output, original_lens_batch):
+                    context.append(sequence[unpadded_len-1, :])
+                context = torch.stack((context))
+                z = model.reparameterize(model.z_mean(context), model.z_log_var(context))
+            elif model.name == "cnn_autoencoder":
+                z, _ = model.encoder(padded_batch)
+            else:
+                z, _ = model.encoder(padded_batch, original_lens_batch)
+            temp_max, _ = torch.max(z, dim = 0)
+            temp_min, _ = torch.min(z, dim = 0)
+            maximum = torch.maximum(maximum, temp_max)
+            minimum = torch.minimum(minimum, temp_min)
+
+    return minimum, maximum
+
+def plot_singular_values(sing_val_list):
+    c00 = np.array(sing_val_list[0])
+    c01 = np.array(sing_val_list[1])
+    c10 = np.array(sing_val_list[2])
+    c11 = np.array(sing_val_list[3])
+    g00 = np.array(sing_val_list[4])
+    g01 = np.array(sing_val_list[5])
+    g10 = np.array(sing_val_list[6])
+    g11 = np.array(sing_val_list[7])
+    temp = len(c00)
+    epochs = []
+    for i in range(temp):
+        epochs.append(i)
+    epochs = np.array(epochs)
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'plotted_singular_values')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    plt.plot(epochs, c00, label = "c0_first_layer")
+    plt.plot(epochs, c01, label = "c1_first_layer")
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Singular value')
+    plt.title("Singular values for first layer")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(directory, "critic_first_layer"), dpi=300)
+    plt.close()
+
+    plt.plot(epochs, c10, label = "c0_last_layer")
+    plt.plot(epochs, c11, label = "c1_last_layer")
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Singular value')
+    plt.title("Singular values for last layer")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(directory, "critic_last_layer"), dpi=300)
+    plt.close()
+
+    plt.plot(epochs, g00, label = "g0_first_layer")
+    plt.plot(epochs, g01, label = "g1_first_layer")
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Singular value')
+    plt.title("Singular values for first layer")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(directory, "generator_first_layer"), dpi=300)
+    plt.close()
+
+    plt.plot(epochs, g10, label = "g0_last_layer")
+    plt.plot(epochs, g11, label = "g1_last_layer")
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Singular value')
+    plt.title("Singular values for last layer")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(os.path.join(directory, "generator_last_layer"), dpi=300)
+    plt.close()
+
+def plot_gan_acc(real_score, fake_score, batch_size, moment, rate):
+    epochs = len(real_score)
+    real_score = np.array(real_score)
+    fake_score = np.array(fake_score)
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'plotted_gan_losses')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    filename = 'Plotted accs after ' + str(epochs) + 'batches (in 100s).png' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
+    final_directory = os.path.join(directory, filename)
+    temp = epochs
+    epochs = []
+    for i in range(temp):
+        epochs.append(i)
+    epochs = np.array(epochs)
+    plt.plot(epochs, real_score, label = 'score_real')
+    plt.plot(epochs, fake_score, label = 'score_fake')
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Critic score')
+    plt.title('Critic scores plotted over ' + str(temp) + ' batches (in 100s)' + ' bs' + str(batch_size) + ' mom' + str(moment), fontsize = 10)
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(final_directory, dpi=300)
+    plt.close()
+
+def plot_gan_loss(c_loss, g_loss, batch_size, moment, rate):
+    epochs = len(c_loss)
+    c_loss = np.array(c_loss)
+    g_loss = np.array(g_loss)
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'plotted_gan_losses')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    filename = 'Plotted loss after ' + str(epochs) + 'batches (in 100s)' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
+    final_directory = os.path.join(directory, filename)
+    temp = epochs
+    epochs = []
+    for i in range(temp):
+        epochs.append(i)
+    epochs = np.array(epochs)
+    plt.plot(epochs, c_loss, label = 'critic loss')
+    plt.plot(epochs, g_loss, label = 'generator loss')
+    #plt.yscale('log')
+    plt.xlabel('Batches (in 100s)')
+    plt.ylabel('Loss')
+    plt.title('G and C losses plotted over ' + str(temp) + ' batches (in 100s)' + ' bs' + str(batch_size) + ' mom' + str(moment), fontsize = 10)
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(final_directory, dpi=300)
+    plt.close()
+
+def normalise(z, min, max):
+    max_diff = max - min
+    z = [(x - min) / (max_diff) for x in z]
+    z = torch.stack((z)).float()
+    return z
+
+def re_scale(z, min, max):
+    max_diff = max - min
+    z = [(max - x) / (max_diff) for x in z]
+    z = torch.stack((z)).float()
+    return z
+
+def sample_bernoulli(config):
+    probs = torch.rand(size=(config.gan_batch_size, config.latent_dim))
+    bernoulli = torch.bernoulli(probs).to(config.device)
+    return bernoulli
+
+def sample_multivariate_gaussian(config):
+    mean = np.zeros(shape=config.latent_dim) 
+    cov = np.random.normal(0, 1, size=(config.latent_dim, config.latent_dim))
+    cov = np.dot(cov, cov.transpose())
+    cov_min = -np.amin(cov)
+    cov_max = np.amax(cov)
+    matrix_max = max(float(cov_min), float(cov_max))
+    cov = cov / matrix_max
+    noise = torch.from_numpy(np.random.default_rng().multivariate_normal(mean, cov, (config.gan_batch_size))).float()
+    noise = noise.to(config.device)
+    return noise
+
+def singular_values(gen, crit):
+    # singular values for critic
+
+    first_layer, _ = torch.topk(torch.linalg.svdvals(crit.net[0].net[0].weight), k = 2)
+    c00 = first_layer[0].item()
+    c01 = first_layer[1].item()
+    last_layer, _ = torch.topk(torch.linalg.svdvals(crit.net[-1].net[-1].weight), k = 2)
+    c10 = last_layer[0].item()
+    c11 = last_layer[1].item()
+
+    # singular values for generator
+
+    first_layer, _ = torch.topk(torch.linalg.svdvals(gen.net[0].net[0].weight), k = 2)
+    g00 = first_layer[0].item()
+    g01 = first_layer[1].item()
+    last_layer, _ = torch.topk(torch.linalg.svdvals(gen.net[-1].net[-1].weight), k = 2)
+    g10 = last_layer[0].item()
+    g11 = last_layer[1].item()
+
+    return (c00, c01, c10, c11, g00, g01, g10, g11)
+
+def write_accs_to_file(acc_real, acc_fake, c_loss, g_loss, batch_size, fam, lr):
+    with open("gan_results.txt", "a") as f:
+        idx = 0
+        ar = "acc_real "
+        af = "acc_fake "
+        cl = "c_loss "
+        gl = "g_loss "
+        
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n")
+        f.write("batch size " + str(batch_size) + " " + "first Adam moment " + str(fam) + " learning rate " + str(lr) + "\n")
+        f.write("##################################################################################################################################" + "\n")
+
+        f.write("Final accs " + ar + str(acc_real[-1]) + " " + af + str(acc_fake[-1]) + " " + cl + str(c_loss[-1]) + " " + gl + str(g_loss[-1]) + "\n")
+        f.write("##################################################################################################################################" + "\n" + "\n")
+        for a_r, a_f, c_l, c_g in zip(acc_real, acc_fake, c_loss, g_loss):
+            f.write("batch_id(100s) " + str(idx) + " " + ar + str(a_r) + " " + af + str(a_f) + " " + cl + str(c_l) + " " + gl + str(c_g) + "\n")
+            idx+=1
+
+    f.close()
 
 def return_bert_score(pred, target, device, batch_size):
     bs = torch.mean(bert_scoring(pred, target, lang="en", device = device, batch_size=batch_size)[-1]).item()
@@ -475,7 +745,7 @@ def load_vocab(vocab_path, max_size = 40_000):
             break
         vocab[line] = count
         count += 1
-        if count >= max_size:
+        if count > max_size:
             break
     revvocab = {v: k for k, v in vocab.items()}
     return vocab, revvocab

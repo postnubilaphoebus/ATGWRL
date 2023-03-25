@@ -374,6 +374,7 @@ class VariationalAutoEncoder(nn.Module):
         self.decoder_dim = config.decoder_dim
         self.bidirectional = config.bidirectional
         self.embedding_dimension = config.word_embedding
+        self.layer_norm = config.layer_norm
         self.dropout = config.dropout_prob
         self.num_layers = 2
         self.layer_multiplier = 2 if self.bidirectional else 1
@@ -384,6 +385,7 @@ class VariationalAutoEncoder(nn.Module):
                                         num_layers = self.num_layers,
                                         batch_first=True, 
                                         bidirectional = self.bidirectional)
+        self.layer_norm_encoder = torch.nn.LayerNorm(self.encoder_dim * self.layer_multiplier)
         self.to_latent = torch.nn.Linear(self.encoder_dim * self.layer_multiplier, self.latent_dim)
         self.z_mean = torch.nn.Linear(self.latent_dim, self.latent_dim)
         self.z_log_var = torch.nn.Linear(self.latent_dim, self.latent_dim)
@@ -393,6 +395,7 @@ class VariationalAutoEncoder(nn.Module):
                                         self.decoder_dim, 
                                         num_layers = self.num_layers,
                                         batch_first=True)
+        self.layer_norm_decoder = torch.nn.LayerNorm(self.decoder_dim)
         self.hidden_to_vocab = torch.nn.Linear(self.decoder_dim, self.vocab_size)
 
     def init_weights(self):
@@ -412,6 +415,9 @@ class VariationalAutoEncoder(nn.Module):
 
         # unpack sequence for further processing
         output, _ = torch.nn.utils.rnn.pad_packed_sequence(output, batch_first=True, total_length = max(x_lens))
+
+        if self.layer_norm == True:
+            output = self.layer_norm_encoder(output)
 
         output = self.to_latent(output)
 
@@ -437,6 +443,8 @@ class VariationalAutoEncoder(nn.Module):
     def decoder(self, z):
         z = self.to_decoder(z)
         out, _ = self.decoder_rnn(z.unsqueeze(1).repeat(1,MAX_SENT_LEN,1), z.unsqueeze(0).repeat(self.num_layers, 1, 1))
+        if self.layer_norm == True:
+            out = self.layer_norm_decoder(out)
         logits = self.hidden_to_vocab(out)
         return logits
     

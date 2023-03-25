@@ -8,7 +8,8 @@ from utils.helper_functions import load_data_from_file, \
                                    real_lengths, \
                                    pad_batch, \
                                    update, \
-                                   finalize
+                                   finalize, \
+                                   normalise
 
 
 def load_model(config, model_name, model_path, weights_matrix = None):
@@ -53,7 +54,9 @@ def distribution_constraint(fitted_distribution, mini_batch, scaling_factor = 0.
 
 def distribution_fitting(config, 
                          model,
-                         data):
+                         data,
+                         min_tensor = None,
+                         max_tensor = None):
     # Global distribution fitting
     # As described by Gong et al. in https://arxiv.org/abs/2212.01521
     # Returns a tensor of shape [2, config.latent_dim],
@@ -81,6 +84,9 @@ def distribution_fitting(config,
                 z, _ = model.encoder(padded_batch)
             else:
                 z, _ = model.encoder(padded_batch, original_lens_batch)
+            # normalise if norm is given
+            if min_tensor and max_tensor:
+                z = normalise(z, min_tensor, max_tensor)
             # [B, H] -> [H, B]
             z = torch.transpose(z, 1, 0)
             z = z.cpu().detach().numpy()
