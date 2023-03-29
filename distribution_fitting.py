@@ -85,7 +85,7 @@ def distribution_fitting(config,
             else:
                 z, _ = model.encoder(padded_batch, original_lens_batch)
             # normalise if norm is given
-            if min_tensor and max_tensor:
+            if torch.is_tensor(min_tensor) and torch.is_tensor(max_tensor):
                 z = normalise(z, min_tensor, max_tensor)
             # [B, H] -> [H, B]
             z = torch.transpose(z, 1, 0)

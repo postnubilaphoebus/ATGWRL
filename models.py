@@ -4,6 +4,7 @@ from torch import nn
 import math
 import numpy as np
 import sys
+import torch.nn.utils.spectral_norm as spectral_norm
 
 MAX_SENT_LEN = 28
 
@@ -142,8 +143,6 @@ class CNN_Encoder(nn.Module):
                                              kernel_size = self.kernel_sizes[1], groups = 1)
         self.l_out_a = (MAX_SENT_LEN - (self.kernel_sizes[0] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
         self.l_out_b = (MAX_SENT_LEN - (self.kernel_sizes[1] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
-        self.batch_norm_a = torch.nn.BatchNorm1d(self.out_channels)
-        self.batch_norm_b = torch.nn.BatchNorm1d(self.out_channels)
         self.max_pool = nn.MaxPool1d(kernel_size = self.max_pool_kernel, stride = self.max_pool_kernel)
         self.to_latent = torch.nn.Linear(round((self.l_out_a + self.l_out_b) * self.out_channels), self.latent_dim)
         self.second_dropout = nn.Dropout(p = self.dropout_prob, inplace=False)
@@ -154,11 +153,9 @@ class CNN_Encoder(nn.Module):
         embedded_t = torch.transpose(embedded, 2, 1)
         c_1_a = self.first_convolution_a(embedded_t)
         c_1_a = self.max_pool(c_1_a)
-        c_1_a = self.batch_norm_a(c_1_a)
         c_1_a = torch.flatten(c_1_a, start_dim = 1)
         c_1_b = self.first_convolution_b(embedded_t)
         c_1_b = self.max_pool(c_1_b)
-        c_1_b = self.batch_norm_b(c_1_b)
         c_1_b = torch.flatten(c_1_b, start_dim = 1)
         c_1_a = torch.transpose(c_1_a, 1, 0)
         c_1_b = torch.transpose(c_1_b, 1, 0)
@@ -487,6 +484,46 @@ class VariationalAutoEncoder(nn.Module):
 ##########################################################################################################
     
 class Block(nn.Module):
+
+    # torch.nn.utils.parametrizations.spectral_norm
+    
+    def __init__(self, block_dim, activation_function = "relu", slope = 0.1, snm = True):
+        super().__init__()
+        if activation_function == "relu":
+            if snm == False:
+                self.net = nn.Sequential(
+                    nn.Linear(block_dim, block_dim),
+                    nn.ReLU(True),
+                    nn.Linear(block_dim, block_dim),
+                )
+            else:
+                self.net = nn.Sequential(
+                    spectral_norm(nn.Linear(block_dim, block_dim)),
+                    nn.ReLU(True),
+                    spectral_norm(nn.Linear(block_dim, block_dim)),
+                )
+        elif activation_function == "leaky_relu":
+            if snm == False:
+                self.net = nn.Sequential(
+                    nn.Linear(block_dim, block_dim),
+                    nn.ReLU(True),
+                    nn.Linear(block_dim, block_dim),
+                )
+            else:
+                self.net = nn.Sequential(
+                    spectral_norm(nn.Linear(block_dim, block_dim)),
+                    nn.ReLU(True),
+                    spectral_norm(nn.Linear(block_dim, block_dim)),
+                )
+        else:
+            sys.exit("Please provide valid activation function.\
+                      Choose among 'relu' and 'leaky_relu'. \
+                     'leaky_relu' slope defaults to 0.1")
+    
+    def forward(self, x):
+        return self.net(x) + x
+    
+class X_Skip_Block(nn.Module):
     
     def __init__(self, block_dim, activation_function = "relu", slope = 0.1):
         super().__init__()
@@ -508,7 +545,7 @@ class Block(nn.Module):
                      'leaky_relu' slope defaults to 0.1")
     
     def forward(self, x):
-        return self.net(x) + x
+        return self.net(x) + 3 * x
     
 class LongerBlock(nn.Module):
     
@@ -566,19 +603,18 @@ class RecursiveLayerNormBlock(nn.Module):
 
 class Generator(nn.Module):
     
-    def __init__(self, n_layers, block_dim, activation_function = 'relu', slope = 0.1):
+    def __init__(self, n_layers, block_dim, activation_function = 'relu', slope = 0.1, snm = False):
         super().__init__()
         self.net = nn.Sequential(
-            *[Block(block_dim, activation_function, slope) for _ in range(n_layers)]
+            *[Block(block_dim, activation_function, slope, snm) for _ in range(n_layers)]
         )
         #self.last_mlp = Block(block_dim, activation_function, slope)
 
     def init_weights(self, activation_function = 'relu'):
         if isinstance(self, nn.Linear):
-            stdv = 1. / math.sqrt(self.weight.size(1))
             torch.nn.init.kaiming_normal_(self.weight, nonlinearity = activation_function)
             if self.bias is not None:
-                self.bias.data.uniform_(-stdv, stdv)
+                self.bias.data.fill_(0.01)
         else:
             pass
 
@@ -587,19 +623,18 @@ class Generator(nn.Module):
 
 class Critic(nn.Module):
     
-    def __init__(self, n_layers, block_dim, activation_function = 'relu', slope = 0.1):
+    def __init__(self, n_layers, block_dim, activation_function = 'relu', slope = 0.1, snm = True):
         super().__init__()
         self.net = nn.Sequential(
-            *[Block(block_dim, activation_function, slope) for _ in range(n_layers)]
+            *[Block(block_dim, activation_function, slope, snm) for _ in range(n_layers)]
         )
         #self.last_mlp = Block(block_dim, activation_function, slope)
 
     def init_weights(self, activation_function = 'relu'):
         if isinstance(self, nn.Linear):
-            stdv = 1. / math.sqrt(self.weight.size(1))
             torch.nn.init.kaiming_normal_(self.weight, nonlinearity = activation_function)
             if self.bias is not None:
-                self.bias.data.uniform_(-stdv, stdv)
+                self.bias.data.fill_(0.01)
         else:
             pass
         

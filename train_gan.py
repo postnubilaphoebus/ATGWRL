@@ -7,11 +7,12 @@ import numpy as np
 import os
 import copy
 import sys
-from models import AutoEncoder, CNNAutoEncoder, Generator, Critic
+from models import AutoEncoder, CNNAutoEncoder, Generator, Critic, VariationalAutoEncoder
 from distribution_fitting import distribution_fitting, distribution_constraint
 import random
 import matplotlib.pyplot as plt
 import time
+import warnings
 from utils.helper_functions import yieldBatch, \
                                    load_data_from_file, \
                                    real_lengths, \
@@ -30,14 +31,35 @@ from utils.helper_functions import yieldBatch, \
                                    singular_values, \
                                    write_accs_to_file
 
-def load_ae(config):
-    print("Loading pretrained ae epoch 5...")
-    model_5 = 'epoch_5_model_cnn_autoencoder.pth'
+def load_ae(model_name, config):
+    weights_matrix = None
+
+    if model_name == "default_autoencoder":
+        model = AutoEncoder(config, weights_matrix)
+        model = model.apply(AutoEncoder.init_weights)
+        model.to(model.device)
+        model_5 = "epoch_5_model_default_autoencoder.pth"
+    elif model_name == "cnn_autoencoder":
+        model = CNNAutoEncoder(config, weights_matrix)
+        model = model.apply(CNNAutoEncoder.init_weights)
+        model.to(model.device)
+        model_5 = 'epoch_5_model_cnn_autoencoder.pth'
+    elif model_name == "variational_autoencoder":
+        model = VariationalAutoEncoder(config, weights_matrix)
+        model = model.apply(VariationalAutoEncoder.init_weights)
+        model.to(model.device)
+        model_5 = "epoch_5_model_variational_autoencoder.pth"
+    else:
+        warnings.warn("Provided invalid model name. Loading default autoencoder...")
+        model = AutoEncoder(config, weights_matrix)
+        model = model.apply(AutoEncoder.init_weights)
+        model.to(model.device)
+        model_5 = "epoch_5_model_default_autoencoder.pth"
+
+    print("Loading pretrained ae of type {}, epoch 5...".format(model_name))
     base_path = os.getcwd()
     saved_models_dir = os.path.join(base_path, r'saved_aes')
     model_5_path = os.path.join(saved_models_dir, model_5)
-    model = CNNAutoEncoder(config)
-    model.to(config.device)
 
     if os.path.exists(saved_models_dir):
         if os.path.isfile(model_5_path):
@@ -110,25 +132,32 @@ def compute_grad_penalty(config, critic, real_data, fake_data):
     return grad_penalty
 
 def train_gan(config, 
-              num_sents = 110_000,
+              num_sents = 2_010_000,
               validation_size = 10_000,
               unroll_steps = 0,
-              norm_data = True,
-              gdf = False,
-              gdf_scaling_factor = 0.001,
-              num_epochs = 20,
+              norm_data = False,
+              gdf = True,
+              gdf_scaling_factor = 1.0,
+              num_epochs = 151,
               gp_lambda = 10,
               print_interval = 100,
               plotting_interval = 50_000, 
-              n_times_critic = 1,
-              data_path = "corpus_v20k_ids.txt", 
-              vocab_path = "vocab_20k.txt"):
-                  
-    config.vocab_size = 20_000
-    config.encoder_dim = 600
-    config.word_embedding = 300
+              n_times_critic = 5,
+              data_path = "corpus_v40k_ids.txt", 
+              vocab_path = "vocab_40k.txt"):
+    
+    model_name = "default_autoencoder"
+    config.vocab_size = 40_001
+
+    if model_name == "variational_autoencoder":
+        config.encoder_dim = 600
+        config.word_embedding = 100
+    else:
+        config.encoder_dim = 100
+        config.word_embedding = 100
+
     print("num_epochs", num_epochs)
-    autoencoder = load_ae(config)
+    autoencoder = load_ae("default_autoencoder", config)
     autoencoder.eval()
 
     data = load_data_from_file(data_path, num_sents)
@@ -137,38 +166,42 @@ def train_gan(config,
     print("Loaded {} sentences".format(data_len))
 
     if norm_data == True:
+        print("normalising autoencoder outputs...")
         min_tensor, max_tensor = find_min_and_max(config, autoencoder, all_data)
+        min_tensor = min_tensor.to(config.device)
+        max_tensor = max_tensor.to(config.device)
     else:
         min_tensor, max_tensor = None, None
 
     if gdf == True:
         fitted_distribution = distribution_fitting(config, autoencoder, all_data, min_tensor, max_tensor)
+        fitted_distribution = fitted_distribution.to(config.device)
 
-    config.gan_batch_size = 256
+    config.gan_batch_size = 512
     config.n_layers = 20
-
-    print("batch size {}, n_layers {}, block_dim {}".format(config.gan_batch_size, config.n_layers, config.block_dim))
-    print("n_times_critic", n_times_critic)
-
     crit_activation_function = "relu"
     gen_activation_function = "relu"
+    config.c_learning_rate = 1e-4
+    config.g_learning_rate = 1e-4
 
+    print("batch size {}, block_dim {}".format(config.gan_batch_size, config.block_dim))
+    print("nlayers critic {}, nlayers generator {}".format(config.n_layers, config.n_layers))
+    print("n_times_critic", n_times_critic)
     print("activation G {}, activation C {}".format(gen_activation_function, crit_activation_function))
-    gen = Generator(config.n_layers, config.block_dim, gen_activation_function).to(config.device)
-    crit = Critic(config.n_layers, config.block_dim, crit_activation_function).to(config.device)
-    #gen = load_gan(config)
-    #crit = load_crit(config)
-
     print("unroll steps", unroll_steps)
     print("G lr", config.g_learning_rate)
     print("D lr", config.c_learning_rate)
+    print("Adam betas {}, {}".format(config.gan_betas[0], config.gan_betas[1]))
+    print("Using WGAN with spectral norm (WGAN-SN)")
 
+    gen = Generator(config.n_layers, config.block_dim, gen_activation_function, snm = False).to(config.device)
+    crit = Critic(config.n_layers, config.block_dim, crit_activation_function, snm = True).to(config.device)
     gen = gen.apply(Generator.init_weights)
     crit = crit.apply(Critic.init_weights)
 
     gen.train()
     crit.train()
-
+    
     gen_optim = torch.optim.Adam(lr = config.g_learning_rate, 
                                  params = gen.parameters(),
                                  betas = (config.gan_betas[0], config.gan_betas[1]),
@@ -198,6 +231,17 @@ def train_gan(config,
     total_time = 0
     autoencoder_time = 0
 
+    pretrain_crit = False
+    print("pretraining critic: {}".format(pretrain_crit))
+    if pretrain_crit == True:
+        critic_pretrain_idx = 0
+        critic_pretrain_n_times = 100
+        pretrain_length = 100
+    else:
+        critic_pretrain_idx = 100
+        critic_pretrain_n_times = 100
+        pretrain_length = 100
+
     for epoch_idx in range(num_epochs):
         for batch_idx, batch in enumerate(yieldBatch(config.gan_batch_size, all_data)):
             t0 = time.time()
@@ -207,23 +251,27 @@ def train_gan(config,
             crit_optim.zero_grad()
             t1 = time.time()
             with torch.no_grad():
-                z_real, _ = autoencoder.encoder(padded_batch)
+                if autoencoder.name == "default_autoencoder" or autoencoder.name == "variational_autoencoder":
+                    z_real, _ = autoencoder.encoder(padded_batch, original_lens_batch)
+                else:
+                    z_real, _ = autoencoder.encoder(padded_batch)
             if norm_data:
                 z_real = normalise(z_real, min_tensor, max_tensor)
             t2 = time.time()
-            noise = sample_bernoulli(config)
+            noise = sample_multivariate_gaussian(config)
             z_fake = gen(noise)
             real_score = crit(z_real)
-            fake_score = crit(z_fake)
+            fake_score = crit(z_fake.detach())
 
-            grad_penalty = compute_grad_penalty(config, crit, z_real, z_fake)
-            c_loss = - torch.mean(real_score) + torch.mean(fake_score) + gp_lambda * grad_penalty
+            #grad_penalty = compute_grad_penalty(config, crit, z_real, z_fake)
+            c_loss = - torch.mean(real_score) + torch.mean(fake_score)# + gp_lambda * grad_penalty
 
             c_loss_interval.append(c_loss.item())
             c_loss.backward()
             crit_optim.step()
 
-            if batch_idx % n_times_critic == 0:
+            if (batch_idx % n_times_critic == 0 and critic_pretrain_idx >= pretrain_length) or (batch_idx % critic_pretrain_n_times == 0):
+                critic_pretrain_idx += 1
                 if unroll_steps > 0:
                     backup_crit = copy.deepcopy(crit)
                     for i in range(unroll_steps):
@@ -231,20 +279,22 @@ def train_gan(config,
                         padded_batch = pad_batch(batch)
                         padded_batch = torch.LongTensor(padded_batch).to(config.device)
                         crit_optim.zero_grad()
-                        with torch.no_grad():
-                            z_real, _  = autoencoder.encoder(padded_batch, original_lens_batch)
+                        if autoencoder.name == "default_autoencoder" or autoencoder.name == "variational_autoencoder":
+                            z_real, _ = autoencoder.encoder(padded_batch, original_lens_batch)
+                        else:
+                            z_real, _ = autoencoder.encoder(padded_batch)
                         if norm_data:
                             z_real = normalise(z_real, min_tensor, max_tensor)
                         real_score = crit(z_real)
-                        noise = sample_bernoulli(config)
+                        noise = sample_multivariate_gaussian(config)
                         with torch.no_grad():
                             z_fake = gen(noise)
                         fake_score = crit(z_fake)
-                        grad_penalty = compute_grad_penalty(config, crit, z_real, z_fake)
-                        c_loss = - torch.mean(real_score) + torch.mean(fake_score) + gp_lambda * grad_penalty
+                        #grad_penalty = compute_grad_penalty(config, crit, z_real, z_fake)
+                        c_loss = - torch.mean(real_score) + torch.mean(fake_score) #+ gp_lambda * grad_penalty
                         c_loss.backward()
                         crit_optim.step()
-                    noise = sample_bernoulli(config)
+                    noise = sample_multivariate_gaussian(config)
                     gen_optim.zero_grad()
                     fake_score = crit(gen(noise))
                     if gdf == True:
@@ -278,10 +328,10 @@ def train_gan(config,
             if agnostic_idx > 0 and agnostic_idx % print_interval == 0:
                 acc_real = torch.mean(real_score)
                 acc_fake = torch.mean(fake_score)
-                c_loss_per_batch.append(cutoff_scores(c_loss.item()))
-                g_loss_per_batch.append(cutoff_scores(g_loss.item()))
-                acc_real_batch.append(cutoff_scores(acc_real.item()))
-                acc_fake_batch.append(cutoff_scores(acc_fake.item()))
+                c_loss_per_batch.append(cutoff_scores(c_loss.item(), 500))
+                g_loss_per_batch.append(cutoff_scores(g_loss.item(), 500))
+                acc_real_batch.append(cutoff_scores(acc_real.item(), 500))
+                acc_fake_batch.append(cutoff_scores(acc_fake.item(), 500))
 
                 with torch.no_grad():
                     sing_vals = singular_values(gen, crit)
@@ -294,11 +344,7 @@ def train_gan(config,
                     gen_sing1_first_layer.append(sing_vals[6])
                     gen_sing1_last_layer.append(sing_vals[7])
 
-            #if agnostic_idx > 5000 and agnostic_idx % plotting_interval == 0:
-                #plot_gan_acc(acc_real_batch, acc_fake_batch)
-                #plot_gan_loss(c_loss_per_batch, g_loss_per_batch)
-
-            if batch_idx > 0 and batch_idx % print_interval == 0:
+            if agnostic_idx > 0 and agnostic_idx % print_interval == 0:
                 average_g_loss = sum(g_loss_interval) / len(g_loss_interval)
                 average_c_loss = sum(c_loss_interval) / len(c_loss_interval)
                 c_loss_interval = []
@@ -306,7 +352,8 @@ def train_gan(config,
                 progress = ((batch_idx+1) * config.gan_batch_size / data_len / num_epochs) + (epoch_idx / num_epochs)
                 progress = progress * 100
                 progress = round(progress, 4)
-                print("Progress {}% | Generator loss {:.6f}| Critic loss {:.6f}| over last {} batches".format(progress, average_g_loss, average_c_loss, print_interval))
+                print("Progress {}% | Generator loss {:.6f}| Critic loss {:.6f}| Acc real {} | Acc fake {} over last {} batches"
+                      .format(progress, average_g_loss, average_c_loss, acc_real.item(), acc_fake.item(), print_interval))
                 
             agnostic_idx +=1
             total_time += t3 - t0
@@ -314,7 +361,7 @@ def train_gan(config,
 
     print("autoencoder as fraction of time", autoencoder_time / total_time)
     print("saving GAN...")
-    save_gan(epoch_idx+1, autoencoder.name, gen, crit)
+    save_gan(epoch_idx+1, autoencoder.name, gen, crit, norm_data)
     write_accs_to_file(acc_real_batch, acc_fake_batch, c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
     plot_gan_acc(acc_real_batch, acc_fake_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
     plot_gan_loss(c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
@@ -326,4 +373,3 @@ def train_gan(config,
                           gen_sing1_first_layer, 
                           gen_sing0_last_layer, 
                           gen_sing1_last_layer))
-    #plot_grad_flow(crit.named_parameters())

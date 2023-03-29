@@ -11,7 +11,7 @@ UNK_ID = 3
 ####################################################################
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-vocab_size = 20_000
+vocab_size = 40_001
 MAX_SENT_LEN = 28 
 
 ####################################################################
@@ -37,8 +37,8 @@ word_embedding = 100
 ####################################################################
 
 max_pool_kernel = 2
-kernel_sizes = [3, 17]
-out_channels = 100
+kernel_sizes = [3, 9]
+out_channels = 10
 
 ####################################################################
 ######################## gan variables #############################
@@ -49,5 +49,5 @@ n_layers = 10
 block_dim = 100
 g_learning_rate = 1e-4
 c_learning_rate = 3e-4
-gan_betas = [0.5, 0.9]
+gan_betas = [0, 0.9]
 shared_learning_rate = 1e-4

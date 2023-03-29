@@ -14,3 +14,4 @@ tqdm==4.64.1
 truecase==0.0.14
 scipy==1.6.2
 scikit-learn==0.24.1
+language-tool-python==2.7.1

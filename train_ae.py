@@ -16,14 +16,16 @@ from utils.helper_functions import yieldBatch, \
                                    pad_batch_and_add_EOS, \
                                    matrix_from_pretrained_embedding, \
                                    load_vocab, \
-                                   autoencoder_info
+                                   autoencoder_info, \
+                                   most_similar_words, \
+                                   sample_word
 
 def train(config, 
           num_epochs = 5,
           model_name = "cnn_autoencoder",
           data_path = "corpus_v40k_ids.txt",
           vocab_path = "vocab_40k.txt", 
-          logging_interval = 100, 
+          logging_interval = 5, 
           saving_interval = 10_000,
           plotting_interval = 10_000,
           validation_size = 10_000,
@@ -34,7 +36,7 @@ def train(config,
     np.random.seed(random_seed)
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path)
+    data = load_data_from_file(data_path, 110_000)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
@@ -49,8 +51,13 @@ def train(config,
         assert config.word_embedding == 100, "glove embedding can only have dim 100, change config"
         glove = torchtext.vocab.GloVe(name='twitter.27B', dim=100) # 27B is uncased
         weights_matrix = matrix_from_pretrained_embedding(list(vocab.keys()), config.vocab_size, config.word_embedding, glove)
+        matrix_for_sampling = most_similar_words(weights_matrix, top_k=20)
     else:
         weights_matrix = None
+
+    # torch.lerp(start, end, weight)
+    # starting from start and ending at end (weight = 0.1 is closed to start)
+    # random.uniform(0.001, 0.2)
 
     if model_name == "default_autoencoder":
         model = AutoEncoder(config, weights_matrix)

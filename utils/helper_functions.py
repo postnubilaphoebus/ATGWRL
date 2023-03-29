@@ -24,6 +24,10 @@ from tokenizers.trainers import BpeTrainer
 from tokenizers.normalizers import NFD, StripAccents
 from tokenizers import normalizers
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial import distance
+from numpy import dot
+from numpy.linalg import norm
+from itertools import combinations
 
 PAD_ID = 0
 EOS_ID = 1
@@ -151,14 +155,19 @@ def plot_grad_flow(named_parameters):
     plt.savefig(final_directory, dpi=300)
     plt.close()
 
-def save_gan(epoch, autoencoder_name, generator, critic):
+def save_gan(epoch, autoencoder_name, generator, critic, norm_data):
     current_directory = os.getcwd()
     directory = os.path.join(current_directory, r'saved_gan')
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    critic_filename = 'critic_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
-    generator_filename = 'generator_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
+    if norm_data == True:
+        critic_filename = 'critic_epoch_' + str(epoch) + "_normed_" + autoencoder_name + '_model.pth'
+        generator_filename = 'generator_epoch_' + str(epoch) + "_normed_" + autoencoder_name + '_model.pth'
+    else:
+        critic_filename = 'critic_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
+        generator_filename = 'generator_epoch_' + str(epoch) + "_" + autoencoder_name + '_model.pth'
+
     critic_directory = os.path.join(directory, critic_filename)
     generator_directory = os.path.join(directory, generator_filename)
     torch.save(generator.state_dict(), generator_directory)
@@ -170,16 +179,34 @@ def sample_word(cumsummed, normalised, original_word):
     sampled_word = bisect_right(cumsummed[original_word], sampled_val)
     return sampled_word
 
-def proportional_prob(config, weights_matrix, percentile_cutoff = 10.0):
-    similarities = cosine_similarity(weights_matrix)
-    normalised = np.array([(x+1) / 2 for x in similarities])
-    np.fill_diagonal(normalised, 0)
-    perc = np.percentile(normalised, percentile_cutoff, axis = 0)
-    for row in range(config.vocab_size):
-        for col in range(config.vocab_size):
-            normalised[row, col] = 0 if normalised[row, col] < perc[row] else normalised[row, col]
-    cumsummed = np.cumsum(normalised, axis = 1)
-    return cumsummed, normalised
+def cosine_similarity_n_space(m1, m2, batch_size=100):
+    assert m1.shape[1] == m2.shape[1]
+    ret = np.ndarray((m1.shape[0], m2.shape[0]))
+    for row_i in range(0, int(m1.shape[0] / batch_size) + 1):
+        start = row_i * batch_size
+        end = min([(row_i + 1) * batch_size, m1.shape[0]])
+        if end <= start:
+            break # cause I'm too lazy to elegantly handle edge cases
+        rows = m1[start: end]
+        sim = cosine_similarity(rows, m2) # rows is O(1) size
+        ret[start: end] = sim
+    return ret
+
+def sample_idx_of_similar_word(word, top_k_matrix):
+    rd_idx = random.randint(0, top_k_matrix.shape[-1])
+    synonym = top_k_matrix[word][rd_idx]
+    return synonym
+
+def most_similar_words(weights_matrix, top_k = 20):
+    # returns 
+    print("calculating similarity matrix of word embedding...")
+    similarities = cosine_similarity_n_space(weights_matrix, weights_matrix)
+    np.fill_diagonal(similarities, 0)
+    print("finding top k values for each word...")
+    top_k_matrix = np.argpartition(similarities, -top_k, axis = -1)
+    top_k_matrix = top_k_matrix[:, -top_k:]
+    print("found, returning array")
+    return top_k_matrix
 
 def cutoff_scores(score, cutoff_val = 5):
     if score > cutoff_val:
@@ -190,14 +217,14 @@ def cutoff_scores(score, cutoff_val = 5):
         return score
     
 def find_min_and_max(config,
-                      model,
-                      data):
+                     model,
+                     data):
     # find min and max of data to normalise data
     # between 0 and 1
     print("finding minimum and maximum in data...")
 
-    maximum = torch.full((config.latent_dim,), -1_000_000.0, dtype=torch.float64)
-    minimum = torch.full((config.latent_dim,), 1_000_000.0, dtype=torch.float64)
+    maximum = torch.full((config.latent_dim,), -1_000_000.0, dtype=torch.float64).to(config.device)
+    minimum = torch.full((config.latent_dim,), 1_000_000.0, dtype=torch.float64).to(config.device)
 
     for batch_idx, batch in enumerate(yieldBatch(1_000, data)):
         original_lens_batch = real_lengths(batch)
@@ -221,6 +248,14 @@ def find_min_and_max(config,
             maximum = torch.maximum(maximum, temp_max)
             minimum = torch.minimum(minimum, temp_min)
 
+    current_directory = os.getcwd()
+    directory = os.path.join(current_directory, r'saved_gan')
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    minimum_file_name = os.path.join(directory, "minimum_for_rescaling_" + model.name + "_.pth")
+    maximum_file_name = os.path.join(directory, "maximum_for_rescaling_" + model.name + "_.pth")
+    torch.save(minimum, minimum_file_name)
+    torch.save(maximum, maximum_file_name)
     return minimum, maximum
 
 def plot_singular_values(sing_val_list):
