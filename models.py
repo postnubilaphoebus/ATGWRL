@@ -134,6 +134,7 @@ class CNN_Encoder(nn.Module):
         self.out_channels = config.out_channels
         self.latent_dim = config.latent_dim
         self.dropout_prob = config.dropout_prob
+        self.use_dropout = config.use_dropout
         self.vocab_size = config.vocab_size
         self.embedding_layer = nn.Embedding(self.vocab_size, self.cnn_embed) if weights_matrix == None \
                                else create_emb_layer(weights_matrix, non_trainable=True)
@@ -141,21 +142,29 @@ class CNN_Encoder(nn.Module):
                                              kernel_size = self.kernel_sizes[0], groups = 1)
         self.first_convolution_b = nn.Conv1d(in_channels = self.cnn_embed, out_channels = self.out_channels, 
                                              kernel_size = self.kernel_sizes[1], groups = 1)
+        self.groupNorm_a = torch.nn.GroupNorm(10, self.out_channels)
+        self.groupNorm_b = torch.nn.GroupNorm(10, self.out_channels)
         self.l_out_a = (MAX_SENT_LEN - (self.kernel_sizes[0] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
         self.l_out_b = (MAX_SENT_LEN - (self.kernel_sizes[1] - 1) - (self.max_pool_kernel - 1) - 1) / self.max_pool_kernel + 1
         self.max_pool = nn.MaxPool1d(kernel_size = self.max_pool_kernel, stride = self.max_pool_kernel)
         self.to_latent = torch.nn.Linear(round((self.l_out_a + self.l_out_b) * self.out_channels), self.latent_dim)
         self.second_dropout = nn.Dropout(p = self.dropout_prob, inplace=False)
 
-    def forward(self, x):
+    def forward(self, x, mixed_up_batch, use_mixup):
 
-        embedded = self.embedding_layer(x)
+        if use_mixup == False:
+            embedded = self.embedding_layer(x)
+        else:
+            embedded = mixed_up_batch
+
         embedded_t = torch.transpose(embedded, 2, 1)
         c_1_a = self.first_convolution_a(embedded_t)
         c_1_a = self.max_pool(c_1_a)
+        c_1_a = self.groupNorm_a(c_1_a)
         c_1_a = torch.flatten(c_1_a, start_dim = 1)
         c_1_b = self.first_convolution_b(embedded_t)
         c_1_b = self.max_pool(c_1_b)
+        c_1_b = self.groupNorm_b(c_1_b)
         c_1_b = torch.flatten(c_1_b, start_dim = 1)
         c_1_a = torch.transpose(c_1_a, 1, 0)
         c_1_b = torch.transpose(c_1_b, 1, 0)
@@ -163,7 +172,8 @@ class CNN_Encoder(nn.Module):
         c_1 = torch.transpose(c_1, 1, 0)
 
         z = self.to_latent(c_1)
-        z = self.second_dropout(z)
+        if self.use_dropout == True:
+            z = self.second_dropout(z)
 
         return z, embedded
     
@@ -177,6 +187,7 @@ class DefaultEncoder(nn.Module):
         self.encoder_dim = config.encoder_dim
         self.latent_dim = config.latent_dim
         self.dropout = config.dropout_prob
+        self.use_dropout = config.use_dropout
         self.hidden_dim = config.encoder_dim
         self.embedding_layer = nn.Embedding(config.vocab_size, self.embedding_dimension) if weights_matrix == None \
                                else create_emb_layer(weights_matrix, non_trainable=True)
@@ -227,11 +238,13 @@ class DefaultEncoder(nn.Module):
         attended = attended.repeat(1, attn_weights.size(1), 1)
         return attended
 
-    def forward(self, x, x_lens):
+    def forward(self, x, x_lens, mixed_up_batch, use_mixup):# mixed_up_batch = None, use_mixup = False
 
         # [B, S] -> [B, S, E]
-        embedded = self.embedding_layer(x)
-
+        if use_mixup == False:
+            embedded = self.embedding_layer(x)
+        else:
+            embedded = mixed_up_batch
         # packing for efficiency and masking
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, x_lens, batch_first=True, enforce_sorted = False)
         # [B, S, E] -> [B, S, H]
@@ -257,9 +270,10 @@ class DefaultEncoder(nn.Module):
         
         # [B, H] -> [B, L]
         z = self.fc_1(context)
-        
-        # dropout
-        z = self.dropout_layer(z)
+
+        if self.use_dropout == True:
+            # dropout
+            z = self.dropout_layer(z)
         
         return z, embedded
 
@@ -281,10 +295,10 @@ class AutoEncoder(nn.Module):
         else:
             pass
         
-    def forward(self, x, x_lens, tf_prob = 0):
+    def forward(self, x, x_lens, tf_prob = 0, mixed_up_batch = None, use_mixup = False):
         
         # [B, S] -> [B, H]
-        z, embedded = self.encoder(x, x_lens)
+        z, embedded = self.encoder(x, x_lens, mixed_up_batch, use_mixup)
         
         # [B, L] -> [S, B, H]
         decoded = self.decoder(z, embedded, tf_prob)
@@ -314,10 +328,10 @@ class CNNAutoEncoder(nn.Module):
         else:
             pass
         
-    def forward(self, x, x_lens, tf_prob = 0):
+    def forward(self, x, x_lens, tf_prob = 0, mixed_up_batch = None, use_mixup = False):
         
         # [B, S] -> [B, H]
-        z, embedded = self.encoder(x)
+        z, embedded = self.encoder(x, mixed_up_batch, use_mixup)
         
         # [B, L] -> [S, B, H]
         decoded = self.decoder(z, embedded, tf_prob)
@@ -373,6 +387,7 @@ class VariationalAutoEncoder(nn.Module):
         self.embedding_dimension = config.word_embedding
         self.layer_norm = config.layer_norm
         self.dropout = config.dropout_prob
+        self.use_dropout = config.use_dropout
         self.num_layers = 2
         self.layer_multiplier = 2 if self.bidirectional else 1
         self.embedding_layer = nn.Embedding(self.vocab_size, self.embedding_dimension) if weights_matrix == None \
@@ -400,10 +415,13 @@ class VariationalAutoEncoder(nn.Module):
             torch.nn.init.xavier_uniform_(self.weight)
             self.bias.data.fill_(0.01)
 
-    def encoder(self, x, x_lens):
+    def encoder(self, x, x_lens, mixed_up_batch, use_mixup):
 
         # [B, S] -> [B, S, E]
-        embedded = self.embedding_layer(x)
+        if use_mixup == False:
+            embedded = self.embedding_layer(x)
+        else:
+            embedded = mixed_up_batch
 
         # packing for masking and speed
         embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, x_lens, batch_first=True, enforce_sorted = False)
@@ -418,7 +436,8 @@ class VariationalAutoEncoder(nn.Module):
 
         output = self.to_latent(output)
 
-        output = self.dropout_layer(output)
+        if self.use_dropout == True:
+            output = self.dropout_layer(output)
 
         return output
 
@@ -445,10 +464,10 @@ class VariationalAutoEncoder(nn.Module):
         logits = self.hidden_to_vocab(out)
         return logits
     
-    def forward(self, x, x_lens):
+    def forward(self, x, x_lens, mixed_up_batch = None, use_mixup = False):
 
         # [B, S] -> [B, S, H]
-        output = self.encoder(x, x_lens)
+        output = self.encoder(x, x_lens, mixed_up_batch, use_mixup)
 
         # [B, S, H] -> [S, B, H]
         output = torch.transpose(output, 1, 0)
@@ -484,8 +503,6 @@ class VariationalAutoEncoder(nn.Module):
 ##########################################################################################################
     
 class Block(nn.Module):
-
-    # torch.nn.utils.parametrizations.spectral_norm
     
     def __init__(self, block_dim, activation_function = "relu", slope = 0.1, snm = True):
         super().__init__()
@@ -628,7 +645,6 @@ class Critic(nn.Module):
         self.net = nn.Sequential(
             *[Block(block_dim, activation_function, slope, snm) for _ in range(n_layers)]
         )
-        #self.last_mlp = Block(block_dim, activation_function, slope)
 
     def init_weights(self, activation_function = 'relu'):
         if isinstance(self, nn.Linear):

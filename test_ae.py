@@ -18,8 +18,8 @@ from utils.helper_functions import load_data_and_create_vocab, \
                                    average_over_nonpadded, \
                                    reformat_decoded_batch, \
                                    rouge_and_bleu, \
-                                   load_vocab, \
-                                   return_bert_score
+                                   load_vocab#, \
+                                   #return_bert_score
 
 def load_model(config, model_name, model_path, weights_matrix = None):
     if os.path.isfile(model_path):

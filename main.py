@@ -8,10 +8,10 @@ from test_gan import test as test_gan
 
 def main(*args, **kwargs):
 
-    #log_dict = train_ae(config)
+    log_dict = train_ae(config)
     #train_gan(config)
     #test(config)
-    test_gan(config)
+    #test_gan(config)
 
 if __name__ == "__main__":
     main(config)

@@ -5,7 +5,7 @@ import sys
 import warnings
 from models import AutoEncoder, CNNAutoEncoder, VariationalAutoEncoder, Generator
 from utils.helper_functions import load_vocab, sample_multivariate_gaussian, re_scale
-from BARTScore.bart_score import BARTScorer
+#from BARTScore.bart_score import BARTScorer
 import language_tool_python
 from collections import defaultdict
 from itertools import groupby

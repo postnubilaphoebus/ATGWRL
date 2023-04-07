@@ -57,7 +57,7 @@ def reconstruction_loss(weights, targets, decoded_logits, loss_fn = None, label_
     return reconstruction_error
 
 def autoencoder_bleu(decoded_logits, padded_batch, revvocab):
-    smoothie = SmoothingFunction().method4
+    smoothie = SmoothingFunction().method1
     m = torch.nn.Softmax(dim = -1)
     decoded_tokens = torch.argmax(m(decoded_logits), dim = -1)
     decoded_tokens = reformat_decoded_batch(decoded_tokens, 0)

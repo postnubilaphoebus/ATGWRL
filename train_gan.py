@@ -132,7 +132,7 @@ def compute_grad_penalty(config, critic, real_data, fake_data):
     return grad_penalty
 
 def train_gan(config, 
-              num_sents = 2_010_000,
+              num_sents = 210_000,
               validation_size = 10_000,
               unroll_steps = 0,
               norm_data = False,

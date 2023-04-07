@@ -16,6 +16,18 @@ from utils.helper_functions import yieldBatch, \
                                    matrix_from_pretrained_embedding, \
                                    load_vocab
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def write_ae_accs_to_file(model_name, train_regime, epoch_num, train_error, val_error, val_bleu):
+    with open("ae_results.txt", "a") as f:
+        f.write("\n")
+        f.write("##################################################################################################################################" + "\n")
+        f.write("model: {} train_regime: {} \n".format(model_name, train_regime))
+        f.write("epoch_num: {}, train error {}, val error {}, val_bleu {} \n".format(epoch_num, train_error, val_error, val_bleu))
+        f.write("##################################################################################################################################" + "\n" + "\n")
+    f.close()
+
 def kl_loss(weights, z_mean_list, z_log_var_list):
     weights = torch.transpose(weights, 1, 0)
     kl_div = []
@@ -29,7 +41,7 @@ def kl_loss(weights, z_mean_list, z_log_var_list):
     return torch.mean(kl_div)
 
 def train(config, 
-          num_epochs = 5,
+          num_epochs = 20,
           data_path = "corpus_v40k_ids.txt",
           vocab_path = "vocab_40k.txt", 
           logging_interval = 100, 
@@ -42,8 +54,10 @@ def train(config,
     torch.manual_seed(random_seed)
     np.random.seed(random_seed)
 
+    balance = False
+
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
-    data = load_data_from_file(data_path)
+    data = load_data_from_file(data_path, 1010_000)
     val, all_data = data[:validation_size], data[validation_size:]
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
@@ -54,6 +68,7 @@ def train(config,
     config.word_embedding = 100
     config.encoder_dim = 600
     config.ae_batch_size = 128
+    train_regimes = ["normal", "word deletion", "masking", "word-mixup"]
 
     if config.pretrained_embedding == True:
         assert config.word_embedding == 100, "glove embedding can only have dim 100, change config"
@@ -65,6 +80,9 @@ def train(config,
     model = VariationalAutoEncoder(config, weights_matrix)
     model = model.apply(VariationalAutoEncoder.init_weights)
     model = model.to(model.device)
+
+    # regularise latent dimension:
+    # to_latent.weight
 
     optimizer = torch.optim.Adam(lr = config.ae_learning_rate, 
                                  params = model.parameters(),
@@ -93,6 +111,7 @@ def train(config,
     print("######################################################")
 
     for epoch_idx in range(num_epochs):
+        epoch_wise_loss = []
         for batch_idx, batch in enumerate(yieldBatch(config.ae_batch_size, all_data)):
             iter_counter += 1
             original_lens_batch = real_lengths(batch)
@@ -111,15 +130,22 @@ def train(config,
                 reconstruction_error = reconstruction_loss(weights, targets, decoded_logits)
 
                 kl_div = kl_loss(weights, z_mean_list, z_log_var_list)
-                
-                loss = reconstruction_error + kl_div
+
+                if balance == True:
+                    if re_list:
+                        reconstruction_error_adjusted = reconstruction_error / (2 * re_list[-1]*re_list[-1])
+                else:
+                    reconstruction_error_adjusted = reconstruction_error
+
+                loss = reconstruction_error_adjusted + kl_div
                 
                 re_list.append(reconstruction_error.item())
+                epoch_wise_loss.append(reconstruction_error.item())
                 kl_list.append(kl_div.item())
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.01, error_if_nonfinite=False)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=False)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
@@ -137,5 +163,6 @@ def train(config,
         save_model(epoch_idx+1, model)
         if validation_size >= config.ae_batch_size:
             val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
+        write_ae_accs_to_file(model.name, train_regimes[0], epoch_idx+1, sum(epoch_wise_loss) / len(epoch_wise_loss), val_error, bleu_score)
 
     return log_dict
