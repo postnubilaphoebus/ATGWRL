@@ -37,13 +37,17 @@ def word_mixup(config, model, targets, padded_batch, matrix_for_sampling):
     num_samples = len(flat_batch)
     rnumbers = [random.randint(0, matrix_for_sampling.shape[-1]-1) for x in range(num_samples)]
     rinterpol_factors = [random.uniform(0.0, 0.3) for x in range(num_samples)]
+
     # index sampling matrix with real words in batch and their sampled nearest neighbours
-    other_words = list(matrix_for_sampling[flat_batch, rnumbers])
-    idx = 0
+    # transform to list for faster indexing
+    # equivalent to list(matrix_for_sampling[flat_batch, rnumbers])
+    test_list = list(matrix_for_sampling)
+    interim = [test_list[i] for i in flat_batch]
+    other_words = [x[i] for x, i in zip(interim, rnumbers)]
+
     # correct interpolation of forbidden words both ways
-    for word, other_word in zip(flat_batch, other_words):
-        other_words[idx] = flat_batch[idx] if (word in forbidden_words or other_word in forbidden_words) else other_words[idx]
-        idx += 1
+    other_words = [word if (word in forbidden_words or other_word in forbidden_words) else other_word for word, other_word in zip(flat_batch, other_words)]
+
     words = torch.LongTensor(padded_batch).to(model.device)
     other_words = torch.LongTensor(other_words).to(model.device)
     other_words = torch.reshape(other_words, (words.shape))
@@ -70,7 +74,7 @@ def word_mixup(config, model, targets, padded_batch, matrix_for_sampling):
         targets[idx, words_flat[idx]] -= weight
         targets[idx, other_words_flat[idx]] = weight
         idx += 1
-    
+
     interpol_batch = torch.stack((interpol_batch)).reshape(words.size(0), words.size(1), config.word_embedding)
     interpol_batch = interpol_batch.cpu().detach()
     interpol_batch = interpol_batch.to(model.device)
