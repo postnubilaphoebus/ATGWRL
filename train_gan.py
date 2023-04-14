@@ -31,6 +31,25 @@ from utils.helper_functions import yieldBatch, \
                                    singular_values, \
                                    write_accs_to_file
 
+def vae_encoding(vae, padded_batch, original_lens_batch):
+    output = vae.encoder(padded_batch, original_lens_batch) #consumes 97% of function time
+    output = torch.transpose(output, 1, 0)
+
+    z_mean_list, z_log_var_list = vae.holistic_regularisation(output)
+
+    # extract h_t-1
+    z_mean_context = []
+    z_log_var_context = []
+    for z_mean_seq, z_log_var_seq, unpadded_len in zip(z_mean_list, z_log_var_list, original_lens_batch):
+        z_mean_context.append(z_mean_seq[unpadded_len-1, :])
+        z_log_var_context.append(z_log_var_seq[unpadded_len-1, :])
+    
+    z_mean_context = torch.stack((z_mean_context))
+    z_log_var_context = torch.stack((z_log_var_context))
+    z = vae.reparameterize(z_mean_context, z_log_var_context)
+
+    return z
+
 def load_ae(model_name, config):
     weights_matrix = None
 
@@ -38,23 +57,27 @@ def load_ae(model_name, config):
         model = AutoEncoder(config, weights_matrix)
         model = model.apply(AutoEncoder.init_weights)
         model.to(model.device)
-        model_5 = "epoch_5_model_default_autoencoder.pth"
+        model_5 = "epoch_10_model_default_autoencoder_regime_normal_latent_mode_dropout.pth"
+        print("loading", model_5)
     elif model_name == "cnn_autoencoder":
         model = CNNAutoEncoder(config, weights_matrix)
         model = model.apply(CNNAutoEncoder.init_weights)
         model.to(model.device)
-        model_5 = 'epoch_5_model_cnn_autoencoder.pth'
+        model_5 = 'epoch_7_model_cnn_autoencoder_regime_normal_latent_mode_dropout.pth'
+        print("loading", model_5)
     elif model_name == "variational_autoencoder":
         model = VariationalAutoEncoder(config, weights_matrix)
         model = model.apply(VariationalAutoEncoder.init_weights)
         model.to(model.device)
-        model_5 = "epoch_5_model_variational_autoencoder.pth"
+        model_5 = "epoch_20_model_variational_autoencoder_regime_normal_latent_mode_dropout.pth"
+        print("loading", model_5)
     else:
         warnings.warn("Provided invalid model name. Loading default autoencoder...")
         model = AutoEncoder(config, weights_matrix)
         model = model.apply(AutoEncoder.init_weights)
         model.to(model.device)
-        model_5 = "epoch_5_model_default_autoencoder.pth"
+        model_5 = "epoch_10_model_default_autoencoder_regime_normal_latent_mode_dropout.pth"
+        print("loading", model_5)
 
     print("Loading pretrained ae of type {}, epoch 5...".format(model_name))
     base_path = os.getcwd()
@@ -131,14 +154,15 @@ def compute_grad_penalty(config, critic, real_data, fake_data):
     grad_penalty = ((grads.norm(2, dim=1) - 1.) ** 2).mean()
     return grad_penalty
 
-def train_gan(config, 
-              num_sents = 210_000,
+def train_gan(config,
+              model_name =  "default_autoencoder",
+              num_sents = 30_000,
               validation_size = 10_000,
               unroll_steps = 0,
               norm_data = False,
-              gdf = True,
+              gdf = False,
               gdf_scaling_factor = 1.0,
-              num_epochs = 151,
+              num_epochs = 10,
               gp_lambda = 10,
               print_interval = 100,
               plotting_interval = 50_000, 
@@ -146,7 +170,6 @@ def train_gan(config,
               data_path = "corpus_v40k_ids.txt", 
               vocab_path = "vocab_40k.txt"):
     
-    model_name = "default_autoencoder"
     config.vocab_size = 40_001
 
     if model_name == "variational_autoencoder":
@@ -157,7 +180,7 @@ def train_gan(config,
         config.word_embedding = 100
 
     print("num_epochs", num_epochs)
-    autoencoder = load_ae("default_autoencoder", config)
+    autoencoder = load_ae(model_name, config)
     autoencoder.eval()
 
     data = load_data_from_file(data_path, num_sents)
@@ -165,16 +188,8 @@ def train_gan(config,
     data_len = len(all_data)
     print("Loaded {} sentences".format(data_len))
 
-    if norm_data == True:
-        print("normalising autoencoder outputs...")
-        min_tensor, max_tensor = find_min_and_max(config, autoencoder, all_data)
-        min_tensor = min_tensor.to(config.device)
-        max_tensor = max_tensor.to(config.device)
-    else:
-        min_tensor, max_tensor = None, None
-
     if gdf == True:
-        fitted_distribution = distribution_fitting(config, autoencoder, all_data, min_tensor, max_tensor)
+        fitted_distribution = distribution_fitting(config, autoencoder, all_data)
         fitted_distribution = fitted_distribution.to(config.device)
 
     config.gan_batch_size = 512
@@ -251,12 +266,14 @@ def train_gan(config,
             crit_optim.zero_grad()
             t1 = time.time()
             with torch.no_grad():
-                if autoencoder.name == "default_autoencoder" or autoencoder.name == "variational_autoencoder":
+                if autoencoder.name == "default_autoencoder":
                     z_real, _ = autoencoder.encoder(padded_batch, original_lens_batch)
-                else:
+                elif autoencoder.name == "cnn_autoencoder":
                     z_real, _ = autoencoder.encoder(padded_batch)
-            if norm_data:
-                z_real = normalise(z_real, min_tensor, max_tensor)
+                elif autoencoder.name == "variational_autoencoder":
+                    z_real = vae_encoding(autoencoder, padded_batch, original_lens_batch)
+                else:
+                    pass
             t2 = time.time()
             noise = sample_multivariate_gaussian(config)
             z_fake = gen(noise)
@@ -279,12 +296,15 @@ def train_gan(config,
                         padded_batch = pad_batch(batch)
                         padded_batch = torch.LongTensor(padded_batch).to(config.device)
                         crit_optim.zero_grad()
-                        if autoencoder.name == "default_autoencoder" or autoencoder.name == "variational_autoencoder":
-                            z_real, _ = autoencoder.encoder(padded_batch, original_lens_batch)
-                        else:
-                            z_real, _ = autoencoder.encoder(padded_batch)
-                        if norm_data:
-                            z_real = normalise(z_real, min_tensor, max_tensor)
+                        with torch.no_grad():
+                            if autoencoder.name == "default_autoencoder":
+                                z_real, _ = autoencoder.encoder(padded_batch, original_lens_batch)
+                            elif autoencoder.name == "cnn_autoencoder":
+                                z_real, _ = autoencoder.encoder(padded_batch)
+                            elif autoencoder.name == "variational_autoencoder":
+                                z_real = vae_encoding(autoencoder, padded_batch, original_lens_batch)
+                            else:
+                                pass
                         real_score = crit(z_real)
                         noise = sample_multivariate_gaussian(config)
                         with torch.no_grad():
@@ -359,12 +379,15 @@ def train_gan(config,
             total_time += t3 - t0
             autoencoder_time += t2 - t1
 
+        if epoch_idx+1 >= 5 and (epoch_idx+1) % 2 == 0:
+            save_gan(epoch_idx+1, autoencoder.name, gen, crit, norm_data)
+
     print("autoencoder as fraction of time", autoencoder_time / total_time)
     print("saving GAN...")
     save_gan(epoch_idx+1, autoencoder.name, gen, crit, norm_data)
     write_accs_to_file(acc_real_batch, acc_fake_batch, c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
-    plot_gan_acc(acc_real_batch, acc_fake_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
-    plot_gan_loss(c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate)
+    plot_gan_acc(acc_real_batch, acc_fake_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate, autoencoder.name)
+    plot_gan_loss(c_loss_per_batch, g_loss_per_batch, config.gan_batch_size, config.gan_betas[0], config.g_learning_rate, autoencoder.name)
     plot_singular_values((crit_sing0_first_layer, 
                           crit_sing1_first_layer, 
                           crit_sing0_last_layer, 

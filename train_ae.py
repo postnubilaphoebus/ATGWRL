@@ -31,6 +31,7 @@ def word_mixup(config, model, targets, padded_batch, matrix_for_sampling):
     # interpolates between two embeddings (words and other_words)
     # where other_words are sampled nearest neighbours of words
     # interpolation weights are drawn from [0, 0.3]
+    t0 = time.time()
 
     forbidden_words = [0, 1, 2, 3] # speacial tokens not pretrained
     flat_batch = [item for sublist in padded_batch for item in sublist]
@@ -41,9 +42,14 @@ def word_mixup(config, model, targets, padded_batch, matrix_for_sampling):
     # index sampling matrix with real words in batch and their sampled nearest neighbours
     # transform to list for faster indexing
     # equivalent to list(matrix_for_sampling[flat_batch, rnumbers])
-    test_list = list(matrix_for_sampling)
-    interim = [test_list[i] for i in flat_batch]
-    other_words = [x[i] for x, i in zip(interim, rnumbers)]
+    #t0 = time.time()
+    #test_list = list(matrix_for_sampling)
+    ##interim = [test_list[i] for i in flat_batch]
+    #other_words = [x[i] for x, i in zip(interim, rnumbers)]
+    #t1 = time.time()
+    t1 = time.time()
+    
+    other_words = matrix_for_sampling[flat_batch, np.random.choice(matrix_for_sampling.shape[-1])]
 
     # correct interpolation of forbidden words both ways
     other_words = [word if (word in forbidden_words or other_word in forbidden_words) else other_word for word, other_word in zip(flat_batch, other_words)]
@@ -68,18 +74,29 @@ def word_mixup(config, model, targets, padded_batch, matrix_for_sampling):
 
     # interpolate embeddings of words with other words
     # interpolate corresponding labels
+    t2 = time.time()
     idx = 0
     for word_embed, other_word_embed, weight in zip(words_embedded, other_words_embedded, rinterpol_factors):
         interpol_batch.append(torch.lerp(word_embed, other_word_embed, weight))
         targets[idx, words_flat[idx]] -= weight
         targets[idx, other_words_flat[idx]] = weight
         idx += 1
+    t3 = time.time()
+    
 
     interpol_batch = torch.stack((interpol_batch)).reshape(words.size(0), words.size(1), config.word_embedding)
     interpol_batch = interpol_batch.cpu().detach()
     interpol_batch = interpol_batch.to(model.device)
     targets = targets.reshape(old_target_shape).cpu().detach()
     targets = targets.to(model.device)
+
+    t_end = time.time()
+
+    full_time = t_end - t0
+    lerp_time = (t3 - t2) / full_time
+    other_time = (t2-t1) / full_time
+    import pdb; pdb.set_trace()
+
 
     return interpol_batch, targets
 
@@ -185,7 +202,8 @@ def train(config,
             teacher_force_prob = 0
 
             if regime == "word-deletion":
-                tampered_batch = word_deletion(batch)
+                # prob = 0.3 default
+                tampered_batch = word_deletion(batch, 0.2)
                 original_lens_batch = real_lengths(tampered_batch)
                 original_lens_batch_untampered = real_lengths(batch)
                 padded_batch = pad_batch(tampered_batch)

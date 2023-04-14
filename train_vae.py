@@ -1,4 +1,5 @@
 from models import VariationalAutoEncoder
+from cnn_vae import CNNVariationalAutoEncoder
 from loss_functions import reconstruction_loss, validation_set_acc
 import torch
 import random
@@ -44,7 +45,7 @@ def train(config,
           num_epochs = 20,
           data_path = "corpus_v40k_ids.txt",
           vocab_path = "vocab_40k.txt", 
-          logging_interval = 100, 
+          logging_interval = 5, 
           saving_interval = 10_000,
           plotting_interval = 10_000,
           validation_size = 10_000,
@@ -54,7 +55,11 @@ def train(config,
     torch.manual_seed(random_seed)
     np.random.seed(random_seed)
 
-    balance = False
+    kl_div_factor = 10.0
+    print("kl_div_factor", kl_div_factor)
+    latent_mode = "sparse" # choose dropout otherwise
+    print("latent_mode", latent_mode)
+    sparsity_penalty = 0.1
 
     print("loading data: {} and vocab: {}".format(data_path, vocab_path)) 
     data = load_data_from_file(data_path, 1010_000)
@@ -63,6 +68,11 @@ def train(config,
     print("Loaded {} sentences".format(data_len))
     vocab, revvocab = load_vocab(vocab_path, 40_000)
     config.vocab_size = len(revvocab)
+
+    if latent_mode == "sparse":
+        config.use_dropout = False
+    else:
+        config.use_dropout = True
 
     config.pretrained_embedding = True
     config.word_embedding = 100
@@ -78,6 +88,7 @@ def train(config,
         weights_matrix = None
 
     model = VariationalAutoEncoder(config, weights_matrix)
+    #model = CNNVariationalAutoEncoder(config, weights_matrix)
     model = model.apply(VariationalAutoEncoder.init_weights)
     model = model.to(model.device)
 
@@ -131,13 +142,12 @@ def train(config,
 
                 kl_div = kl_loss(weights, z_mean_list, z_log_var_list)
 
-                if balance == True:
-                    if re_list:
-                        reconstruction_error_adjusted = reconstruction_error / (2 * re_list[-1]*re_list[-1])
-                else:
-                    reconstruction_error_adjusted = reconstruction_error
+                if latent_mode == "sparse":
+                    l1_sum = model.to_latent.weight.abs().sum()
+                    l1_regularization = (l1_sum * sparsity_penalty / config.latent_dim)
 
-                loss = reconstruction_error_adjusted + kl_div
+                loss = reconstruction_error+ kl_div_factor * kl_div + l1_regularization
+                print("reconstruction_error {}, kl_div * kl_div_factor {}, lr reg{}".format(reconstruction_error.item(), kl_div.item() * kl_div_factor, l1_regularization.item()))
                 
                 re_list.append(reconstruction_error.item())
                 epoch_wise_loss.append(reconstruction_error.item())
@@ -160,7 +170,7 @@ def train(config,
                 print('Progress {:.4f}% | Epoch {} | Batch {} | Loss {:.10f} | Reconstruction Error {:.10f} | current lr: {:.6f} | kl divergence {:.4f}'\
                       .format(progress,epoch_idx, batch_idx+1, loss.item(), reconstruction_error.item(), optimizer.param_groups[0]['lr'], kl_div.item()))
                 
-        save_model(epoch_idx+1, model)
+        save_model(epoch_idx+1, model, train_regimes[0], latent_mode)
         if validation_size >= config.ae_batch_size:
             val_error, bleu_score = validation_set_acc(config, model, val, revvocab)
         write_ae_accs_to_file(model.name, train_regimes[0], epoch_idx+1, sum(epoch_wise_loss) / len(epoch_wise_loss), val_error, bleu_score)

@@ -18,8 +18,8 @@ from utils.helper_functions import load_data_and_create_vocab, \
                                    average_over_nonpadded, \
                                    reformat_decoded_batch, \
                                    rouge_and_bleu, \
-                                   load_vocab#, \
-                                   #return_bert_score
+                                   load_vocab,  \
+                                   return_bert_score
 
 def load_model(config, model_name, model_path, weights_matrix = None):
     if os.path.isfile(model_path):
@@ -36,7 +36,7 @@ def load_model(config, model_name, model_path, weights_matrix = None):
             model = model.apply(ExperimentalAutoencoder.init_weights)
             model.to(model.device)
         elif model_name == "variational_autoencoder":
-            model = VariationalAutoEncoder(config)
+            model = VariationalAutoEncoder(config, weights_matrix)
             model = model.apply(VariationalAutoEncoder.init_weights)
             model.to(model.device)
         else:
@@ -47,12 +47,12 @@ def load_model(config, model_name, model_path, weights_matrix = None):
     return model
 
 def test(config):
-    location = "/data/s4184416/peregrine/saved_aes/epoch_4_model_cnn_autoencoder.pth"
-    #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_4_model_cnn_autoencoder.pth"
-    model_path = location
-    model_name = "cnn_autoencoder"
-    config.word_embedding = 100
-    config.encoder_dim = 100
+    #location = "/data/s4184416/peregrine/saved_aes/epoch_4_model_cnn_autoencoder.pth"
+    model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_6_model_default_autoencoder_regime_masking_latent_mode_dropout.pth"
+    #model_path = location
+    model_name = "default_autoencoder"
+    if model_name == "variational_autoencoder":
+        config.encoder_dim = 600
     #model_name = "variational_autoencoder"
     #model_path =  location
     #model_path = "/Users/lauridsstockert/Desktop/test_new_models/saved_aes/epoch_5_model_variational_autoencoder.pth"
@@ -72,11 +72,15 @@ def test(config):
     step_size = 1000
     decoded_list = []
     for i in range(0, 10_000, step_size):
-        decoded_logits = model(padded_batch[i:i+1000], original_lens_batch[i:i+1000])
+        if model.name != "variational_autoencoder":
+            decoded_logits = model(padded_batch[i:i+1000], original_lens_batch[i:i+1000])
+        else:
+            _, _, decoded_logits = model(padded_batch[i:i+1000], original_lens_batch[i:i+1000])
         decoded_tokens = torch.argmax(decoded_logits, dim = -1)
         decoded_tokens = reformat_decoded_batch(decoded_tokens, 0)
         decoded_list.extend(decoded_tokens)
     padded_batch = padded_batch.tolist()
+    print("done argmaxing validation data, moving to eval")
 
     scores = [0] * 9
 
@@ -101,16 +105,16 @@ def test(config):
         for i in range(len(interim)):
             scores[i] += interim[i]
 
-    batched_score = 0
-    cnt = 0
-    for i in range(0, 10_000, step_size):
-        dec = decoded_sents[i:i+1000]
-        tar = target_sents[i:i+1000]
-        bs = return_bert_score(dec, tar, device=config.device, batch_size=step_size)
-        bs = round(bs, 4)
-        batched_score += bs
-        cnt +=1
+    #batched_score = 0
+    #cnt = 0
+    #for i in range(0, 10_000, step_size):
+        #dec = decoded_sents[i:i+1000]
+        #tar = target_sents[i:i+1000]
+        #bs = return_bert_score(dec, tar, device=config.device, batch_size=step_size)
+        #bs = round(bs, 4)
+        #batched_score += bs
+        #cnt +=1
     scores = [x / loaded_sents for x in scores]
-    scores[-1] = batched_score / cnt
+    scores[-1] = 0 #batched_score / cnt
     for score, name in zip(scores, score_names):
         print("{}: {}".format(name, score))

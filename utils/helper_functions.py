@@ -2,7 +2,7 @@ from datasets import load_dataset
 from nltk.tokenize import WhitespaceTokenizer, TreebankWordTokenizer
 from nltk.translate.bleu_score import SmoothingFunction
 from rouge_score import rouge_scorer
-from bert_score import score as bert_scoring
+#from bert_score import score as bert_scoring
 from nltk.translate.bleu_score import sentence_bleu
 from matplotlib.lines import Line2D
 import os.path
@@ -193,7 +193,7 @@ def cosine_similarity_n_space(m1, m2, batch_size=100):
     return ret
 
 def sample_idx_of_similar_word(word, top_k_matrix):
-    rd_idx = random.randint(0, top_k_matrix.shape[-1])
+    rd_idx = random.randint(0, top_k_matrix.shape[-1]-1)
     synonym = top_k_matrix[word][rd_idx]
     return synonym
 
@@ -202,10 +202,10 @@ def most_similar_words(weights_matrix, top_k = 20):
     print("calculating similarity matrix of word embedding...")
     similarities = cosine_similarity_n_space(weights_matrix, weights_matrix)
     np.fill_diagonal(similarities, 0)
-    print("finding top k values for each word...")
+    print("finding top k most similar words for each word...")
     top_k_matrix = np.argpartition(similarities, -top_k, axis = -1)
     top_k_matrix = top_k_matrix[:, -top_k:]
-    print("found, returning array")
+    print("found, returning top-k self-similarity matrix")
     return top_k_matrix
 
 def cutoff_scores(score, cutoff_val = 5):
@@ -316,7 +316,7 @@ def plot_singular_values(sing_val_list):
     plt.savefig(os.path.join(directory, "generator_last_layer"), dpi=300)
     plt.close()
 
-def plot_gan_acc(real_score, fake_score, batch_size, moment, rate):
+def plot_gan_acc(real_score, fake_score, batch_size, moment, rate, ae_name):
     epochs = len(real_score)
     real_score = np.array(real_score)
     fake_score = np.array(fake_score)
@@ -324,7 +324,7 @@ def plot_gan_acc(real_score, fake_score, batch_size, moment, rate):
     directory = os.path.join(current_directory, r'plotted_gan_losses')
     if not os.path.exists(directory):
         os.makedirs(directory)
-    filename = 'Plotted accs after ' + str(epochs) + 'batches (in 100s).png' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
+    filename = ae_name + 'Plotted accs after ' + str(epochs) + 'batches (in 100s).png' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
     final_directory = os.path.join(directory, filename)
     temp = epochs
     epochs = []
@@ -341,7 +341,7 @@ def plot_gan_acc(real_score, fake_score, batch_size, moment, rate):
     plt.savefig(final_directory, dpi=300)
     plt.close()
 
-def plot_gan_loss(c_loss, g_loss, batch_size, moment, rate):
+def plot_gan_loss(c_loss, g_loss, batch_size, moment, rate, ae_name):
     epochs = len(c_loss)
     c_loss = np.array(c_loss)
     g_loss = np.array(g_loss)
@@ -349,7 +349,7 @@ def plot_gan_loss(c_loss, g_loss, batch_size, moment, rate):
     directory = os.path.join(current_directory, r'plotted_gan_losses')
     if not os.path.exists(directory):
         os.makedirs(directory)
-    filename = 'Plotted loss after ' + str(epochs) + 'batches (in 100s)' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
+    filename = ae_name + 'Plotted loss after ' + str(epochs) + 'batches (in 100s)' + ' bs' + str(batch_size) + ' mom' + str(moment) + ' learning rate ' + str(rate) + '.png'
     final_directory = os.path.join(directory, filename)
     temp = epochs
     epochs = []
@@ -438,9 +438,9 @@ def write_accs_to_file(acc_real, acc_fake, c_loss, g_loss, batch_size, fam, lr):
 
     f.close()
 
-def return_bert_score(pred, target, device, batch_size):
-    bs = torch.mean(bert_scoring(pred, target, lang="en", device = device, batch_size=batch_size)[-1]).item()
-    return bs
+#def return_bert_score(pred, target, device, batch_size):
+    #bs = torch.mean(bert_scoring(pred, target, lang="en", device = device, batch_size=batch_size)[-1]).item()
+    #return bs
 
 def rouge_and_bleu(pred, target, rouge_scorer, verbose = False):
     smoothie = SmoothingFunction().method4
@@ -678,13 +678,12 @@ def sub_ner_tokens(sentence, nlp):
 
     return sentence
 
-def save_model(epoch, model):
+def save_model(epoch, model, regime, latent_mode):
     current_directory = os.getcwd()
     directory = os.path.join(current_directory, r'saved_aes')
     if not os.path.exists(directory):
         os.makedirs(directory)
-
-    filename = 'epoch_' + str(epoch) + '_model_' + model.name +  '.pth'
+    filename = 'epoch_' + str(epoch) + '_model_' + model.name + '_regime_' + regime + '_latent_mode_' +  latent_mode +  '.pth'
     final_directory = os.path.join(directory, filename)
     torch.save(model.state_dict(), final_directory)
 
@@ -702,6 +701,21 @@ def word_deletion(batch, prob = 0.3):
         new_batch.append(new_sentence)
     
     return new_batch
+
+def random_masking(batch, UNK_ID, prob = 0.3):
+    new_batch = []
+    for sentence in batch:
+        new_sentence = []
+        for word in sentence:
+            rand_float = random.uniform(0, 1)
+            if rand_float > prob:
+                new_sentence.append(word)
+            else:
+                new_sentence.append(UNK_ID)
+        new_batch.append(new_sentence)
+    
+    return new_batch
+
 
 def real_lengths(unpadded_list):
     sent_lens = [len(i) for i in unpadded_list]

@@ -26,6 +26,7 @@ num_attn_heads = 5
 encoder_dim = 100
 decoder_dim = 600
 latent_dim = 100
+use_dropout = True
 dropout_prob = 0.5
 layer_norm = True
 ae_learning_rate = 5e-4
@@ -38,7 +39,7 @@ word_embedding = 100
 
 max_pool_kernel = 2
 kernel_sizes = [3, 9]
-out_channels = 10
+out_channels = 30
 
 ####################################################################
 ######################## gan variables #############################

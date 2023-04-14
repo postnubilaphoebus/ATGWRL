@@ -150,7 +150,7 @@ class CNN_Encoder(nn.Module):
         self.to_latent = torch.nn.Linear(round((self.l_out_a + self.l_out_b) * self.out_channels), self.latent_dim)
         self.second_dropout = nn.Dropout(p = self.dropout_prob, inplace=False)
 
-    def forward(self, x, mixed_up_batch, use_mixup):
+    def forward(self, x, mixed_up_batch = None, use_mixup = False):
 
         if use_mixup == False:
             embedded = self.embedding_layer(x)
@@ -238,7 +238,7 @@ class DefaultEncoder(nn.Module):
         attended = attended.repeat(1, attn_weights.size(1), 1)
         return attended
 
-    def forward(self, x, x_lens, mixed_up_batch, use_mixup):# mixed_up_batch = None, use_mixup = False
+    def forward(self, x, x_lens, mixed_up_batch = None, use_mixup = False):
 
         # [B, S] -> [B, S, E]
         if use_mixup == False:
@@ -415,7 +415,7 @@ class VariationalAutoEncoder(nn.Module):
             torch.nn.init.xavier_uniform_(self.weight)
             self.bias.data.fill_(0.01)
 
-    def encoder(self, x, x_lens, mixed_up_batch, use_mixup):
+    def encoder(self, x, x_lens, mixed_up_batch = None, use_mixup = False):
 
         # [B, S] -> [B, S, E]
         if use_mixup == False:
