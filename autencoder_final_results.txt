@@ -1,0 +1,134 @@
+CNN-DCNN (epoch 50):
+
+rouge1: 0.828
+rouge2: 0.746
+rouge3: 0.669
+rouge4: 0.599
+bleu1: 0.849
+bleu2: 0.750
+bleu3: 0.684
+bleu4: 0.712
+
+Default AE (epoch 11):
+
+rouge1: 0.586
+rouge2: 0.429
+rouge3: 0.328
+rouge4: 0.242
+bleu1: 0.557
+bleu2: 0.346
+bleu3: 0.260
+bleu4: 0.298
+
+AE mixup (epoch 8):
+
+rouge1: 0.306
+rouge2: 0.097
+rouge3: 0.037
+rouge4: 0.014
+bleu1: 0.294
+bleu2: 0.088
+bleu3: 0.043
+bleu4: 0.064
+
+AE deletion (epoch 15):
+
+rouge1: 0.415
+rouge2: 0.246
+rouge3: 0.139
+rouge4: 0.076
+bleu1: 0.375
+bleu2: 0.190
+bleu3: 0.104
+bleu4: 0.134
+
+AE masking (epoch 5):
+rouge1: 0.555
+rouge2: 0.354
+rouge3: 0.238
+rouge4: 0.156
+bleu1: 0.516
+bleu2: 0.303
+bleu3: 0.195
+bleu4: 0.233
+
+CNN-AE (epoch 5):
+
+rouge1: 0.628
+rouge2: 0.465
+rouge3: 0.353
+rouge4: 0.265
+bleu1: 0.598
+bleu2: 0.411
+bleu3: 0.318
+bleu4: 0.352
+
+CNN-AE mask (epoch 5):
+
+rouge1: 0.563
+rouge2: 0.357
+rouge3: 0.238
+rouge4: 0.157
+bleu1: 0.586
+bleu2: 0.351
+bleu3: 0.244
+bleu4: 0.281
+
+CNN-AE mixup (epoch 8):
+
+rouge1: 0.245
+rouge2: 0.183
+rouge3: 0.136
+rouge4: 0.099
+bleu1: 0.192
+bleu2: 0.144
+bleu3: 0.108
+bleu4: 0.120
+
+CNN-AE word deletion (epoch 20):
+
+rouge1: 0.460
+rouge2: 0.278
+rouge3: 0.163
+rouge4: 0.090
+bleu1: 0.436
+bleu2: 0.227
+bleu3: 0.135
+bleu4: 0.165
+
+VAE (epoch 40):
+
+rouge1: 0.586
+rouge2: 0.407
+rouge3: 0.297
+rouge4: 0.213
+bleu1: 0.619
+bleu2: 0.403
+bleu3: 0.303
+bleu4: 0.339
+
+VAE masking (epoch 40):
+
+rouge1: 0.514
+rouge2: 0.300
+rouge3: 0.190
+rouge4: 0.118
+bleu1: 0.560
+bleu2: 0.308
+bleu3: 0.205
+bleu4: 0.241
+
+VAE word deletion (epoch 40):
+
+rouge1: 0.397
+rouge2: 0.204
+rouge3: 0.115
+rouge4: 0.061
+bleu1: 0.404
+bleu2: 0.179
+bleu3: 0.107
+bleu4: 0.135
+
+
+
+
