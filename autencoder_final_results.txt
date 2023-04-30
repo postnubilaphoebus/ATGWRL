@@ -9,6 +9,16 @@ bleu2: 0.750
 bleu3: 0.684
 bleu4: 0.712
 
+CNN-DCNN weightnorm (epoch 126):
+rouge1: 0.932
+rouge2: 0.906
+rouge3: 0.873
+rouge4: 0.826
+bleu1: 0.938
+bleu2: 0.905
+bleu3: 0.885
+bleu4: 0.898
+
 Default AE (epoch 11):
 
 rouge1: 0.586
